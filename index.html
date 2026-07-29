@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meu Planner Financeiro 🌸</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ===================== TELA DE BOAS-VINDAS (primeira vez) ===================== -->
+<div id="welcomeOverlay" class="welcome-overlay">
+  <div class="welcome-card">
+    <div class="welcome-ribbon"><i class="fa-solid fa-heart"></i></div>
+    <h1>Bem-vinda ao seu Planner Financeiro</h1>
+    <p>Antes de começar, como podemos te chamar?</p>
+    <input type="text" id="welcomeName" placeholder="Seu nome" maxlength="30">
+    <label class="welcome-currency">
+      Moeda principal
+      <select id="welcomeCurrency">
+        <option value="BRL">R$ — Real</option>
+        <option value="USD">$ — Dólar</option>
+        <option value="EUR">€ — Euro</option>
+      </select>
+    </label>
+    <button class="btn btn-primary btn-block" id="welcomeStart">Começar a organizar <i class="fa-solid fa-arrow-right"></i></button>
+  </div>
+</div>
+
+<div class="app" id="app">
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark"><i class="fa-solid fa-spa"></i></span>
+      <div class="brand-text">
+        <strong>Meu Planner</strong>
+        <small>financeiro</small>
+      </div>
+    </div>
+
+    <div class="sidebar-user">
+      <div class="avatar" id="avatarPreview"><i class="fa-solid fa-user"></i></div>
+      <div>
+        <p class="user-hello">Olá,</p>
+        <p class="user-name" id="sidebarUserName">Usuária</p>
+      </div>
+    </div>
+
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-page="dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></button>
+      <button class="nav-tab" data-page="gastos"><i class="fa-solid fa-bag-shopping"></i><span>Gastos</span></button>
+      <button class="nav-tab" data-page="recebimentos"><i class="fa-solid fa-sack-dollar"></i><span>Recebimentos</span></button>
+      <button class="nav-tab" data-page="cartoes"><i class="fa-solid fa-credit-card"></i><span>Cartões</span></button>
+      <button class="nav-tab" data-page="reserva"><i class="fa-solid fa-piggy-bank"></i><span>Reserva</span></button>
+      <button class="nav-tab" data-page="graficos"><i class="fa-solid fa-chart-pie"></i><span>Gráficos</span></button>
+      <button class="nav-tab" data-page="calendario"><i class="fa-solid fa-calendar-days"></i><span>Calendário</span></button>
+      <button class="nav-tab" data-page="categorias"><i class="fa-solid fa-tags"></i><span>Categorias</span></button>
+      <button class="nav-tab" data-page="configuracoes"><i class="fa-solid fa-gear"></i><span>Configurações</span></button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="btn-ghost" id="exportBackupBtn"><i class="fa-solid fa-cloud-arrow-down"></i> Backup</button>
+      <button class="btn-ghost" id="themeToggleBtn"><i class="fa-solid fa-moon"></i> Modo escuro</button>
+    </div>
+  </aside>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- ===================== MAIN ===================== -->
+  <main class="main">
+
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <button class="icon-btn mobile-only" id="menuBtn"><i class="fa-solid fa-bars"></i></button>
+      <div class="search-wrap">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" id="globalSearch" placeholder="Pesquisar gastos, recebimentos, cartões, categorias...">
+        <div class="search-results" id="searchResults"></div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="alertsBtn"><i class="fa-solid fa-bell"></i><span class="badge" id="alertsBadge">0</span></button>
+        <button class="btn btn-primary btn-sm" id="quickAddBtn"><i class="fa-solid fa-plus"></i> Novo</button>
+      </div>
+    </header>
+
+    <!-- painel de alertas -->
+    <div class="alerts-panel" id="alertsPanel">
+      <div class="alerts-panel-head">
+        <strong><i class="fa-solid fa-bell"></i> Avisos</strong>
+        <button class="icon-btn-sm" id="closeAlertsBtn"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="alertsList" class="alerts-list"></div>
+    </div>
+
+    <!-- ===================== PAGE: DASHBOARD ===================== -->
+    <section class="page active" id="page-dashboard">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Visão geral · <span id="dashMonthLabel">Mês</span></p>
+          <h2>Seu resumo financeiro</h2>
+        </div>
+        <div class="month-switcher">
+          <button class="icon-btn-sm" id="dashPrevMonth"><i class="fa-solid fa-chevron-left"></i></button>
+          <span id="dashCurrentMonth">—</span>
+          <button class="icon-btn-sm" id="dashNextMonth"><i class="fa-solid fa-chevron-right"></i></button>
+        </div>
+      </div>
+
+      <div class="cards-grid" id="dashboardCards"></div>
+
+      <div class="dash-lower">
+        <div class="panel">
+          <div class="panel-head">
+            <h3><i class="fa-solid fa-clock-rotate-left"></i> Últimos lançamentos</h3>
+          </div>
+          <div id="recentList" class="recent-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h3><i class="fa-solid fa-chart-pie"></i> Gastos por categoria</h3>
+          </div>
+          <canvas id="chartDashPie" height="220"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: GASTOS ===================== -->
+    <section class="page" id="page-gastos">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Controle</p>
+          <h2>Gastos</h2>
+        </div>
+        <button class="btn btn-primary" id="addGastoBtn"><i class="fa-solid fa-plus"></i> Novo gasto</button>
+      </div>
+
+      <div class="filters-bar">
+        <select id="filterGastoMes"><option value="">Todos os meses</option></select>
+        <select id="filterGastoCategoria"><option value="">Todas categorias</option></select>
+        <select id="filterGastoCartao"><option value="">Todos cartões</option></select>
+        <select id="filterGastoForma">
+          <option value="">Toda forma de pagamento</option>
+          <option value="Dinheiro">Dinheiro</option>
+          <option value="Pix">Pix</option>
+          <option value="Débito">Débito</option>
+          <option value="Crédito">Crédito</option>
+        </select>
+        <select id="filterGastoStatus">
+          <option value="">Pago e pendente</option>
+          <option value="pago">Pago</option>
+          <option value="pendente">Pendente</option>
+        </select>
+        <input type="text" id="filterGastoBusca" placeholder="Buscar...">
+      </div>
+
+      <div class="table-wrap panel">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Despesa</th><th>Categoria</th><th>Data</th><th>Pagamento</th><th>Parcela</th><th>Valor</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="gastosTableBody"></tbody>
+        </table>
+        <p class="empty-state" id="gastosEmpty" style="display:none">Nenhum gasto encontrado. Que tal cadastrar o primeiro? 🌷</p>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: RECEBIMENTOS ===================== -->
+    <section class="page" id="page-recebimentos">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Controle</p>
+          <h2>Recebimentos</h2>
+        </div>
+        <button class="btn btn-primary" id="addRecebimentoBtn"><i class="fa-solid fa-plus"></i> Novo recebimento</button>
+      </div>
+
+      <div class="filters-bar">
+        <select id="filterRecMes"><option value="">Todos os meses</option></select>
+        <select id="filterRecCategoria"><option value="">Todas categorias</option></select>
+        <input type="text" id="filterRecBusca" placeholder="Buscar...">
+      </div>
+
+      <div class="table-wrap panel">
+        <table class="data-table">
+          <thead><tr><th>Descrição</th><th>Categoria</th><th>Data</th><th>Valor</th><th></th></tr></thead>
+          <tbody id="recebimentosTableBody"></tbody>
+        </table>
+        <p class="empty-state" id="recebimentosEmpty" style="display:none">Nenhum recebimento cadastrado ainda. 💐</p>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: CARTÕES ===================== -->
+    <section class="page" id="page-cartoes">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Controle</p>
+          <h2>Cartões de crédito</h2>
+        </div>
+        <button class="btn btn-primary" id="addCartaoBtn"><i class="fa-solid fa-plus"></i> Novo cartão</button>
+      </div>
+      <div class="cards-grid" id="cartoesGrid"></div>
+      <p class="empty-state" id="cartoesEmpty" style="display:none">Nenhum cartão cadastrado. Adicione o primeiro! 💳</p>
+    </section>
+
+    <!-- ===================== PAGE: RESERVA ===================== -->
+    <section class="page" id="page-reserva">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Planejamento</p>
+          <h2>Reserva financeira</h2>
+        </div>
+        <button class="btn btn-primary" id="editMetaBtn"><i class="fa-solid fa-bullseye"></i> Definir meta</button>
+      </div>
+
+      <div class="reserva-layout">
+        <div class="panel reserva-goal">
+          <div class="locket" id="locketProgress">
+            <svg viewBox="0 0 140 140">
+              <circle cx="70" cy="70" r="60" class="locket-bg"/>
+              <circle cx="70" cy="70" r="60" class="locket-fg" id="locketCircle"/>
+            </svg>
+            <div class="locket-center">
+              <span id="locketPercent">0%</span>
+              <small>da meta</small>
+            </div>
+          </div>
+          <p class="reserva-meta-label">Meta: <strong id="metaValor">R$ 0,00</strong></p>
+          <p class="reserva-atual-label">Guardado: <strong id="reservaAtual">R$ 0,00</strong></p>
+        </div>
+
+        <div class="panel">
+          <h3><i class="fa-solid fa-coins"></i> Movimentações da reserva</h3>
+          <div class="reserva-form">
+            <input type="number" step="0.01" id="reservaValorInput" placeholder="Valor (use negativo p/ retirar)">
+            <input type="text" id="reservaDescInput" placeholder="Descrição (ex: aporte de julho)">
+            <button class="btn btn-primary" id="addReservaBtn"><i class="fa-solid fa-plus"></i> Lançar</button>
+          </div>
+          <div id="reservaHistorico" class="recent-list"></div>
+        </div>
+
+        <div class="panel">
+          <h3><i class="fa-solid fa-chart-line"></i> Evolução da reserva</h3>
+          <canvas id="chartReserva" height="220"></canvas>
+        </div>
+
+        <div class="cards-grid mini">
+          <div class="stat-card">
+            <span class="stat-label">Guardado este mês</span>
+            <strong id="statGuardadoMes">R$ 0,00</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Média mensal guardada</span>
+            <strong id="statMediaGuardada">R$ 0,00</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: GRÁFICOS ===================== -->
+    <section class="page" id="page-graficos">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Análise</p>
+          <h2>Gráficos</h2>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="panel"><h3>Gastos por categoria</h3><canvas id="chartCategoria"></canvas></div>
+        <div class="panel"><h3>Evolução do saldo</h3><canvas id="chartSaldo"></canvas></div>
+        <div class="panel"><h3>Receitas x Despesas</h3><canvas id="chartReceitaDespesa"></canvas></div>
+        <div class="panel"><h3>Economia mensal</h3><canvas id="chartEconomia"></canvas></div>
+        <div class="panel"><h3>Gastos por cartão</h3><canvas id="chartCartao"></canvas></div>
+        <div class="panel"><h3>Evolução do patrimônio</h3><canvas id="chartPatrimonio"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: CALENDÁRIO ===================== -->
+    <section class="page" id="page-calendario">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Organização</p>
+          <h2>Calendário financeiro</h2>
+        </div>
+        <div class="month-switcher">
+          <button class="icon-btn-sm" id="calPrevMonth"><i class="fa-solid fa-chevron-left"></i></button>
+          <span id="calCurrentMonth">—</span>
+          <button class="icon-btn-sm" id="calNextMonth"><i class="fa-solid fa-chevron-right"></i></button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="calendar-weekdays">
+          <span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span>
+        </div>
+        <div id="calendarGrid" class="calendar-grid"></div>
+      </div>
+    </section>
+
+    <!-- ===================== PAGE: CATEGORIAS ===================== -->
+    <section class="page" id="page-categorias">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Organização</p>
+          <h2>Categorias</h2>
+        </div>
+        <button class="btn btn-primary" id="addCategoriaBtn"><i class="fa-solid fa-plus"></i> Nova categoria</button>
+      </div>
+      <div class="cards-grid" id="categoriasGrid"></div>
+    </section>
+
+    <!-- ===================== PAGE: CONFIGURAÇÕES ===================== -->
+    <section class="page" id="page-configuracoes">
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Personalização</p>
+          <h2>Configurações</h2>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <div class="panel">
+          <h3><i class="fa-solid fa-user-pen"></i> Perfil</h3>
+          <label>Nome de exibição<input type="text" id="cfgNome"></label>
+          <label>Foto de perfil (emoji ou iniciais)<input type="text" id="cfgAvatar" maxlength="2" placeholder="🌸"></label>
+          <label>Moeda<select id="cfgMoeda">
+            <option value="BRL">R$ — Real</option>
+            <option value="USD">$ — Dólar</option>
+            <option value="EUR">€ — Euro</option>
+          </select></label>
+        </div>
+
+        <div class="panel">
+          <h3><i class="fa-solid fa-palette"></i> Aparência</h3>
+          <label>Tema
+            <select id="cfgTema">
+              <option value="claro">Claro</option>
+              <option value="escuro">Escuro</option>
+            </select>
+          </label>
+          <label>Cor principal</label>
+          <div class="color-swatches" id="colorSwatches"></div>
+        </div>
+
+        <div class="panel">
+          <h3><i class="fa-solid fa-database"></i> Dados</h3>
+          <p class="muted">Seus dados ficam salvos apenas neste navegador.</p>
+          <button class="btn btn-secondary btn-block" id="cfgExportBackup"><i class="fa-solid fa-file-export"></i> Exportar backup (JSON)</button>
+          <label class="btn btn-secondary btn-block file-btn">
+            <i class="fa-solid fa-file-import"></i> Importar backup (JSON)
+            <input type="file" id="cfgImportBackup" accept=".json" hidden>
+          </label>
+          <button class="btn btn-secondary btn-block" id="cfgExportExcel"><i class="fa-solid fa-file-csv"></i> Exportar gastos (Excel/CSV)</button>
+          <button class="btn btn-secondary btn-block" id="cfgExportPdf"><i class="fa-solid fa-file-pdf"></i> Exportar relatório (PDF)</button>
+          <button class="btn btn-danger btn-block" id="cfgResetAll"><i class="fa-solid fa-trash"></i> Apagar todos os dados</button>
+        </div>
+
+        <div class="panel">
+          <h3><i class="fa-solid fa-save"></i> Salvar</h3>
+          <p class="muted">Clique para aplicar as alterações do perfil e aparência.</p>
+          <button class="btn btn-primary btn-block" id="cfgSaveBtn"><i class="fa-solid fa-check"></i> Salvar configurações</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ===================== MODAL GENÉRICO ===================== -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modalBox">
+    <div class="modal-head">
+      <h3 id="modalTitle">Título</h3>
+      <button class="icon-btn-sm" id="modalCloseBtn"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- toast -->
+<div class="toast" id="toast"></div>
+
+<!-- painel dia do calendário -->
+<div class="modal-overlay" id="dayModalOverlay">
+  <div class="modal" id="dayModalBox">
+    <div class="modal-head">
+      <h3 id="dayModalTitle">Dia</h3>
+      <button class="icon-btn-sm" id="dayModalCloseBtn"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body" id="dayModalBody"></div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
