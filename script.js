@@ -38,6 +38,7 @@ function defaultData(){
     categoriasGasto: CATEGORIA_ICONS_DEFAULT.map(c=>({id:uid(), ...c})),
     categoriasReceita: CATEGORIA_RECEITA_DEFAULT.map(c=>({id:uid(), ...c})),
     reserva:{ meta:20000, historico:[] },
+    patrimonioInicial:{ dataInicio: todayISO(), saldoConta:0, reservaInicial:0, outros:[], faturasIniciais:{} },
   };
 }
 
@@ -51,6 +52,7 @@ function loadDB(){
     const base = defaultData();
     return Object.assign(base, parsed, {
       config: Object.assign(base.config, parsed.config||{}),
+      patrimonioInicial: Object.assign(base.patrimonioInicial, parsed.patrimonioInicial||{}),
     });
   }catch(e){
     console.error('Erro ao carregar dados', e);
@@ -148,8 +150,8 @@ function totalGastosMes(key){ return gastosDoMes(key).reduce((s,g)=>s+Number(g.v
 function totalRecebimentosMes(key){ return recebimentosDoMes(key).reduce((s,r)=>s+Number(r.valor),0); }
 
 function saldoAteMes(key){
-  // soma tudo até (e incluindo) o mês key
-  let saldo = 0;
+  // soma tudo até (e incluindo) o mês key, partindo do saldo inicial em conta cadastrado
+  let saldo = (DB.patrimonioInicial && DB.patrimonioInicial.saldoConta) || 0;
   DB.recebimentos.forEach(r=>{ if(monthKey(r.data) <= key) saldo += Number(r.valor); });
   DB.gastos.forEach(g=>{ if(monthKey(g.data) <= key && g.forma!=='Crédito') saldo -= Number(g.valor); });
   // faturas de crédito entram no vencimento
@@ -163,8 +165,16 @@ function totalFaturaCartaoMes(cartaoId, key){
 }
 function totalUsadoCartao(cartaoId){
   // soma de parcelas futuras/pendentes em aberto (aproximação: todas as parcelas não pagas)
-  return DB.gastos.filter(g=>g.cartaoId===cartaoId && g.forma==='Crédito' && !g.pago)
+  const dosGastos = DB.gastos.filter(g=>g.cartaoId===cartaoId && g.forma==='Crédito' && !g.pago)
     .reduce((s,g)=>s+Number(g.valor),0);
+  const inicial = (DB.patrimonioInicial && DB.patrimonioInicial.faturasIniciais && DB.patrimonioInicial.faturasIniciais[cartaoId]) || 0;
+  return dosGastos + inicial;
+}
+function outrosPatrimoniosTotal(){
+  return ((DB.patrimonioInicial && DB.patrimonioInicial.outros) || []).reduce((s,o)=>s+Number(o.valor),0);
+}
+function patrimonioTotalAtual(key){
+  return saldoAteMes(key) + reservaTotal() + outrosPatrimoniosTotal();
 }
 function contasPendentes(key){
   return DB.gastos.filter(g=> monthKey(g.vencimento||g.data)===key && !g.pago).length;
@@ -196,7 +206,8 @@ function proximoVencimentoCartao(){
   return melhor;
 }
 function reservaTotal(){
-  return DB.reserva.historico.reduce((s,h)=>s+Number(h.valor),0);
+  const base = (DB.patrimonioInicial && DB.patrimonioInicial.reservaInicial) || 0;
+  return base + DB.reserva.historico.reduce((s,h)=>s+Number(h.valor),0);
 }
 function reservaGuardadaNoMes(key){
   return DB.reserva.historico.filter(h=>monthKey(h.data)===key).reduce((s,h)=>s+Number(h.valor),0);
@@ -204,7 +215,22 @@ function reservaGuardadaNoMes(key){
 function reservaMediaMensal(){
   const meses = new Set(DB.reserva.historico.map(h=>monthKey(h.data)));
   if(meses.size===0) return 0;
-  return reservaTotal()/meses.size;
+  return DB.reserva.historico.reduce((s,h)=>s+Number(h.valor),0)/meses.size;
+}
+function reservaRendimentoTotal(){
+  return DB.reserva.historico.filter(h=>h.tipo==='rendimento').reduce((s,h)=>s+Number(h.valor),0);
+}
+function reservaRendimentoMes(key){
+  return DB.reserva.historico.filter(h=>h.tipo==='rendimento' && monthKey(h.data)===key).reduce((s,h)=>s+Number(h.valor),0);
+}
+/* histórico "visível", incluindo o saldo inicial (se houver) como item fixo, não editável */
+function reservaHistoricoVisivel(){
+  const list = [...DB.reserva.historico];
+  const inicial = (DB.patrimonioInicial && DB.patrimonioInicial.reservaInicial) || 0;
+  if(inicial){
+    list.push({ id:'__inicial__', tipo:'inicial', valor:inicial, desc:'Saldo inicial (patrimônio de partida)', data: DB.patrimonioInicial.dataInicio || todayISO(), virtual:true });
+  }
+  return list;
 }
 
 /* =====================================================
@@ -227,7 +253,7 @@ function renderDashboard(){
   const pendentes = contasPendentes(key);
 
   const cards = [
-    {label:'Saldo atual', value:fmtMoney(saldo), icon:'fa-wallet', cls: saldo<0?'danger':'good'},
+    {label: key===todayISO().slice(0,7) ? 'Saldo atual' : `Saldo até ${monthShort(key)}`, value:fmtMoney(saldo), icon:'fa-wallet', cls: saldo<0?'danger':'good'},
     {label:'Recebido no mês', value:fmtMoney(totalReceb), icon:'fa-sack-dollar', cls:'good'},
     {label:'Gasto no mês', value:fmtMoney(totalGasto), icon:'fa-bag-shopping', cls:'danger'},
     {label:'Previsto (pendente)', value:fmtMoney(previstoFuturo), icon:'fa-hourglass-half', cls:'warn'},
@@ -238,6 +264,9 @@ function renderDashboard(){
     {label:'Próx. vencimento cartão', value: prontoVenc? `${prontoVenc.nome} · ${prontoVenc.data.getDate()}/${prontoVenc.data.getMonth()+1}` : '—', icon:'fa-calendar-day', cls:''},
     {label:'Contas pendentes', value:pendentes, icon:'fa-list-check', cls: pendentes>0?'warn':'good'},
   ];
+  if(outrosPatrimoniosTotal()>0){
+    cards.push({label:'Outros patrimônios', value:fmtMoney(outrosPatrimoniosTotal()), icon:'fa-gem', cls:'good'});
+  }
 
   document.getElementById('dashboardCards').innerHTML = cards.map(c=>`
     <div class="stat-card ${c.cls}">
@@ -285,7 +314,8 @@ function renderDashPie(key){
   });
 }
 function paletteFor(n){
-  const base = ['#F49AC1','#C9A15A','#B29DD9','#8FBFD9','#7FB08F','#E4729E','#EFC77A','#D9A7B2','#A98DC4','#F2C6D6'];
+  const base = [DB.config.cor, '#C9A15A','#B29DD9','#8FBFD9','#7FB08F','#E4729E','#EFC77A','#D9A7B2','#A98DC4','#F2C6D6']
+    .filter((c,i,arr)=>arr.indexOf(c)===i);
   const out=[]; for(let i=0;i<n;i++) out.push(base[i%base.length]); return out;
 }
 document.getElementById('dashPrevMonth')?.addEventListener('click', ()=>{ currentDashMonth = addMonths(currentDashMonth,-1); renderDashboard(); });
@@ -401,8 +431,14 @@ function openGastoModal(id){
     <div id="fGastoCreditoWrap" style="display:${g?.forma==='Crédito'?'block':'none'}">
       <div class="form-row">
         <div class="form-group"><label>Cartão</label><select id="fGastoCartao"><option value="">Selecione</option>${cartaoOptions}</select></div>
-        <div class="form-group"><label>Número de parcelas</label><input type="number" min="1" id="fGastoParcelas" value="${g?g.parcelas:1}"></div>
+        <div class="form-group"><label>Número de parcelas</label><input type="number" min="1" id="fGastoParcelas" value="${g?g.parcelas:1}" ${g?'disabled':''}></div>
       </div>
+      ${g ? (g.parcelas>1 ? `<p class="muted" style="margin-top:-8px">Esta despesa faz parte de um parcelamento (${g.parcelaAtual}/${g.parcelas}). O número de parcelas não pode ser alterado por aqui — para refazer o parcelamento, exclua todas as parcelas e cadastre novamente.</p>` : '') : `
+      <div class="form-group">
+        <label>Parcela atual (use se a compra já está em andamento)</label>
+        <input type="number" min="1" id="fGastoParcelaInicial" value="1">
+      </div>
+      <p class="muted" style="margin-top:-8px">Se for uma compra nova, deixe "1" — o campo "Valor" acima deve ser o valor total da compra. Se já está em andamento (ex: parcela 3 de 10), informe "3" e o campo "Valor" deve ser o valor de cada parcela.</p>`}
     </div>
     <div class="form-row">
       <div class="form-group"><label>Data de vencimento</label><input type="date" id="fGastoVencimento" value="${g?(g.vencimento||g.data):todayISO()}"></div>
@@ -445,13 +481,18 @@ function saveGasto(id){
     Object.assign(g, {nome,categoria,valor,data,forma,cartaoId,vencimento,pago,obs});
     // não recalcula parcelamento em edição simples
   } else if(parcelas>1){
+    const parcelaInicialEl = document.getElementById('fGastoParcelaInicial');
+    const parcelaInicial = parcelaInicialEl ? Math.min(parcelas, Math.max(1, parseInt(parcelaInicialEl.value)||1)) : 1;
     const grupo = uid();
-    const valorParcela = Math.round((valor/parcelas)*100)/100;
-    for(let i=0;i<parcelas;i++){
+    // se a compra já está em andamento (parcela inicial > 1), o valor informado já é o valor de cada parcela
+    const valorParcela = parcelaInicial>1 ? valor : Math.round((valor/parcelas)*100)/100;
+    const restantes = parcelas - parcelaInicial + 1;
+    for(let i=0;i<restantes;i++){
+      const numeroParcela = parcelaInicial+i;
       const venc = addMonthsToDate(vencimento||data, i);
       DB.gastos.push({
         id:uid(), nome, categoria, valor:valorParcela, data, forma, cartaoId,
-        parcelas, parcelaAtual:i+1, vencimento:venc, pago: i===0?pago:false, obs, grupoParcelamento:grupo
+        parcelas, parcelaAtual:numeroParcela, vencimento:venc, pago: numeroParcela===parcelaInicial?pago:false, obs, grupoParcelamento:grupo
       });
     }
   } else {
@@ -504,6 +545,7 @@ function applyRecFilters(){
   document.addEventListener('input', e=>{ if(e.target.id===id) applyRecFilters(); });
 });
 function deleteRec(id){
+  if(!confirm('Tem certeza que deseja excluir este recebimento?')) return;
   DB.recebimentos = DB.recebimentos.filter(r=>r.id!==id);
   saveDB(); toast('Recebimento removido','fa-solid fa-trash'); renderRecebimentosPage(); renderAlerts();
 }
@@ -628,35 +670,59 @@ function renderReservaPage(){
   document.getElementById('locketCircle').style.strokeDashoffset = offset;
 
   const key = currentDashMonth;
-  document.getElementById('statGuardadoMes').textContent = fmtMoney(reservaGuardadaNoMes(key));
-  document.getElementById('statMediaGuardada').textContent = fmtMoney(reservaMediaMensal());
+  document.getElementById('reservaMiniStats').innerHTML = `
+    <div class="stat-card good">
+      <span class="stat-label">Guardado este mês</span>
+      <strong>${fmtMoney(reservaGuardadaNoMes(key))}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Média mensal guardada</span>
+      <strong>${fmtMoney(reservaMediaMensal())}</strong>
+    </div>
+    <div class="stat-card good">
+      <span class="stat-label">Rendimento do mês</span>
+      <strong>${fmtMoney(reservaRendimentoMes(key))}</strong>
+    </div>
+    <div class="stat-card good">
+      <span class="stat-label">Rendimento acumulado</span>
+      <strong>${fmtMoney(reservaRendimentoTotal())}</strong>
+    </div>
+  `;
 
-  const hist = [...DB.reserva.historico].sort((a,b)=>b.data.localeCompare(a.data));
-  document.getElementById('reservaHistorico').innerHTML = hist.length ? hist.map(h=>`
-    <div class="recent-item">
+  if(!document.getElementById('reservaDataInput').value) document.getElementById('reservaDataInput').value = todayISO();
+
+  const hist = reservaHistoricoVisivel().sort((a,b)=>b.data.localeCompare(a.data));
+  document.getElementById('reservaHistorico').innerHTML = hist.length ? hist.map(h=>{
+    const icon = h.tipo==='rendimento' ? 'fa-arrow-trend-up' : h.tipo==='inicial' ? 'fa-flag' : 'fa-piggy-bank';
+    const label = h.tipo==='rendimento' ? 'Rendimento' : h.tipo==='inicial' ? 'Saldo inicial' : 'Aporte/retirada';
+    return `<div class="recent-item">
       <div class="ri-left">
-        <div class="ri-icon"><i class="fa-solid fa-piggy-bank"></i></div>
-        <div><p class="ri-title">${escapeHtml(h.desc||'Movimentação')}</p><p class="ri-sub">${formatDataBr(h.data)}</p></div>
+        <div class="ri-icon"><i class="fa-solid ${icon}"></i></div>
+        <div><p class="ri-title">${escapeHtml(h.desc||label)}</p><p class="ri-sub">${label} · ${formatDataBr(h.data)}</p></div>
       </div>
       <div class="ri-value ${h.valor<0?'neg':'pos'}">${h.valor<0?'':'+'} ${fmtMoney(h.valor)}</div>
-      <button class="icon-btn-sm" onclick="deleteReservaMov('${h.id}')"><i class="fa-solid fa-trash"></i></button>
-    </div>`).join('') : `<p class="empty-state">Nenhuma movimentação ainda. Comece guardando um valor! 💰</p>`;
+      ${h.virtual ? '' : `<button class="icon-btn-sm" onclick="deleteReservaMov('${h.id}')"><i class="fa-solid fa-trash"></i></button>`}
+    </div>`;
+  }).join('') : `<p class="empty-state">Nenhuma movimentação ainda. Comece guardando um valor! 💰</p>`;
 
   renderReservaChart();
 }
 function deleteReservaMov(id){
+  if(!confirm('Tem certeza que deseja excluir esta movimentação?')) return;
   DB.reserva.historico = DB.reserva.historico.filter(h=>h.id!==id);
-  saveDB(); renderReservaPage();
+  saveDB(); toast('Movimentação removida','fa-solid fa-trash'); renderReservaPage();
 }
 document.getElementById('addReservaBtn').addEventListener('click', ()=>{
   const valor = parseFloat(document.getElementById('reservaValorInput').value);
   const desc = document.getElementById('reservaDescInput').value.trim();
+  const tipo = document.getElementById('reservaTipoInput').value;
+  const data = document.getElementById('reservaDataInput').value || todayISO();
   if(isNaN(valor)){ toast('Informe um valor válido 🌷','fa-solid fa-triangle-exclamation'); return; }
-  DB.reserva.historico.push({id:uid(), valor, desc, data:todayISO()});
+  DB.reserva.historico.push({id:uid(), valor, desc, data, tipo});
   saveDB();
   document.getElementById('reservaValorInput').value='';
   document.getElementById('reservaDescInput').value='';
-  toast('Movimentação registrada!');
+  toast(tipo==='rendimento' ? 'Rendimento registrado!' : 'Movimentação registrada!');
   renderReservaPage(); renderAlerts();
 });
 document.getElementById('editMetaBtn').addEventListener('click', ()=>{
@@ -675,15 +741,16 @@ document.getElementById('editMetaBtn').addEventListener('click', ()=>{
 });
 let chartReserva;
 function renderReservaChart(){
-  const hist = [...DB.reserva.historico].sort((a,b)=>a.data.localeCompare(b.data));
+  const hist = reservaHistoricoVisivel().sort((a,b)=>a.data.localeCompare(b.data));
   let acumulado = 0;
   const labels = [], values = [];
   hist.forEach(h=>{ acumulado += Number(h.valor); labels.push(formatDataBr(h.data)); values.push(acumulado); });
   const ctx = document.getElementById('chartReserva');
   if(chartReserva) chartReserva.destroy();
+  const accentRgb = hexToRgb(DB.config.cor);
   chartReserva = new Chart(ctx, {
     type:'line',
-    data:{ labels, datasets:[{ label:'Reserva acumulada', data:values, borderColor:'#E4729E', backgroundColor:'rgba(228,114,158,.15)', fill:true, tension:.35 }] },
+    data:{ labels, datasets:[{ label:'Reserva acumulada', data:values, borderColor:DB.config.cor, backgroundColor:`rgba(${accentRgb.r},${accentRgb.g},${accentRgb.b},.15)`, fill:true, tension:.35 }] },
     options:{ plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true } } }
   });
 }
@@ -742,8 +809,7 @@ function renderGraficosPage(){
   });
 
   destroyChart('patr');
-  let acumulado = 0;
-  const patrVals = meses.map(m=>{ acumulado = saldoAteMes(m) + reservaTotal(); return acumulado; });
+  const patrVals = meses.map(m=> saldoAteMes(m) + reservaTotal() + outrosPatrimoniosTotal());
   chartsRefs.patr = new Chart(document.getElementById('chartPatrimonio'), {
     type:'line',
     data:{ labels:meses.map(monthShort), datasets:[{label:'Patrimônio', data:patrVals, borderColor:'#8FBFD9', backgroundColor:'rgba(143,191,217,.25)', fill:true, tension:.35}] },
@@ -844,6 +910,7 @@ function renderCategoriasPage(){
   `;
 }
 function deleteCategoria(id, tipo){
+  if(!confirm('Excluir esta categoria? Os lançamentos que já usam ela não serão apagados, só perdem o emoji na listagem.')) return;
   if(tipo==='gasto') DB.categoriasGasto = DB.categoriasGasto.filter(c=>c.id!==id);
   else DB.categoriasReceita = DB.categoriasReceita.filter(c=>c.id!==id);
   saveDB(); toast('Categoria removida','fa-solid fa-trash'); renderCategoriasPage();
@@ -997,25 +1064,64 @@ document.getElementById('cfgSaveBtn').addEventListener('click', ()=>{
   saveDB();
   applyConfigVisuals();
   toast('Configurações salvas!');
-  renderDashboard();
+  renderPage(activePageId());
 });
 function applyConfigVisuals(){
   document.documentElement.setAttribute('data-theme', DB.config.tema);
-  document.documentElement.style.setProperty('--accent', DB.config.cor);
+  const shades = shadeAccent(DB.config.cor);
+  document.documentElement.style.setProperty('--accent', shades.accent);
+  document.documentElement.style.setProperty('--accent-dark', shades.dark);
+  document.documentElement.style.setProperty('--accent-light', shades.light);
+  document.documentElement.style.setProperty('--accent-lighter', shades.lighter);
   const rgb = hexToRgb(DB.config.cor);
   document.documentElement.style.setProperty('--accent-rgb', `${rgb.r},${rgb.g},${rgb.b}`);
+  applyChartTheme();
   document.getElementById('sidebarUserName').textContent = DB.config.nome;
   document.getElementById('avatarPreview').textContent = DB.config.avatar;
   document.getElementById('themeToggleBtn').innerHTML = DB.config.tema==='escuro'
     ? '<i class="fa-solid fa-sun"></i> Modo claro' : '<i class="fa-solid fa-moon"></i> Modo escuro';
 }
+function applyChartTheme(){
+  const style = getComputedStyle(document.documentElement);
+  Chart.defaults.color = style.getPropertyValue('--texto-suave').trim() || '#9C7C8C';
+  Chart.defaults.borderColor = style.getPropertyValue('--linha').trim() || '#F3DCE6';
+  Chart.defaults.font.family = 'Quicksand';
+}
+function activePageId(){
+  const active = document.querySelector('.nav-tab.active');
+  return active ? active.dataset.page : 'dashboard';
+}
 function hexToRgb(hex){
   const m = hex.replace('#','');
   return { r: parseInt(m.substring(0,2),16), g: parseInt(m.substring(2,4),16), b: parseInt(m.substring(4,6),16) };
 }
+function rgbToHex(r,g,b){
+  const h = n => Math.max(0,Math.min(255,Math.round(n))).toString(16).padStart(2,'0');
+  return '#'+h(r)+h(g)+h(b);
+}
+function mixColor(hex, target, amount){
+  const c = hexToRgb(hex);
+  const r = c.r + (target.r-c.r)*amount;
+  const g = c.g + (target.g-c.g)*amount;
+  const b = c.b + (target.b-c.b)*amount;
+  return rgbToHex(r,g,b);
+}
+function shadeAccent(hex){
+  const white = {r:255,g:255,b:255}, black = {r:0,g:0,b:0};
+  return {
+    accent: hex,
+    dark: mixColor(hex, black, 0.26),
+    light: mixColor(hex, white, 0.5),
+    lighter: mixColor(hex, white, 0.82),
+  };
+}
 document.getElementById('themeToggleBtn').addEventListener('click', ()=>{
   DB.config.tema = DB.config.tema==='escuro' ? 'claro' : 'escuro';
   saveDB(); applyConfigVisuals();
+  if(document.getElementById('page-configuracoes').classList.contains('active')){
+    document.getElementById('cfgTema').value = DB.config.tema;
+  }
+  renderPage(activePageId());
 });
 
 /* --- backup json --- */
@@ -1087,6 +1193,78 @@ document.getElementById('cfgExportPdf').addEventListener('click', ()=>{
   win.document.close();
   setTimeout(()=>win.print(), 400);
 });
+
+/* --- patrimônio inicial --- */
+function outroRowHtml(nome='', valor=''){
+  return `<div class="form-row outro-row" style="margin-bottom:10px">
+    <input type="text" class="outro-nome" placeholder="Ex: Carro, poupança em outro banco..." value="${escapeHtml(nome)}">
+    <div style="display:flex;gap:8px">
+      <input type="number" step="0.01" class="outro-valor" placeholder="Valor" value="${valor}">
+      <button class="icon-btn-sm" onclick="this.closest('.outro-row').remove()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>`;
+}
+function openPatrimonioModal(){
+  const p = DB.patrimonioInicial;
+  const cartoesHtml = DB.cartoes.length ? DB.cartoes.map(c=>`
+    <div class="form-group">
+      <label>Fatura em aberto hoje — ${escapeHtml(c.nome)}</label>
+      <input type="number" step="0.01" class="fatura-inicial-input" data-cartao-id="${c.id}" value="${(p.faturasIniciais&&p.faturasIniciais[c.id])||0}">
+    </div>`).join('') : `<p class="muted">Você ainda não cadastrou nenhum cartão.</p>`;
+
+  openModal('Patrimônio inicial', `
+    <p class="muted" style="margin-top:-6px">Estes valores representam o que você já tinha <strong>antes</strong> de começar a usar o app — eles não entram como gastos ou recebimentos do dia a dia, apenas como ponto de partida dos indicadores.</p>
+    <div class="form-group"><label>Data de início de uso do sistema</label><input type="date" id="fPatrimonioData" value="${p.dataInicio||todayISO()}"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Saldo já disponível em conta</label><input type="number" step="0.01" id="fPatrimonioSaldoConta" value="${p.saldoConta||0}"></div>
+      <div class="form-group"><label>Reserva / investimentos já guardados</label><input type="number" step="0.01" id="fPatrimonioReserva" value="${p.reservaInicial||0}"></div>
+    </div>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">Faturas de cartão já em aberto</h4>
+    <div id="patrimonioCartoesWrap">${cartoesHtml}</div>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">Outros patrimônios (imóveis, veículos, outras contas...)</h4>
+    <div id="patrimonioOutrosWrap">${(p.outros||[]).map(o=>outroRowHtml(o.nome,o.valor)).join('')}</div>
+    <button class="btn btn-secondary" style="width:auto;margin-bottom:14px" id="addOutroBtn"><i class="fa-solid fa-plus"></i> Adicionar item</button>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" style="width:auto" id="cancelPatrimonio">Cancelar</button>
+      <button class="btn btn-primary" id="savePatrimonio"><i class="fa-solid fa-check"></i> Salvar</button>
+    </div>
+  `);
+  document.getElementById('addOutroBtn').addEventListener('click', ()=>{
+    document.getElementById('patrimonioOutrosWrap').insertAdjacentHTML('beforeend', outroRowHtml());
+  });
+  document.getElementById('cancelPatrimonio').addEventListener('click', closeModal);
+  document.getElementById('savePatrimonio').addEventListener('click', savePatrimonioInicial);
+}
+function savePatrimonioInicial(){
+  const dataInicio = document.getElementById('fPatrimonioData').value || todayISO();
+  const saldoConta = parseFloat(document.getElementById('fPatrimonioSaldoConta').value)||0;
+  const reservaInicial = parseFloat(document.getElementById('fPatrimonioReserva').value)||0;
+
+  const faturasIniciais = {};
+  document.querySelectorAll('.fatura-inicial-input').forEach(inp=>{
+    const v = parseFloat(inp.value)||0;
+    if(v) faturasIniciais[inp.dataset.cartaoId] = v;
+  });
+
+  const outros = [];
+  document.querySelectorAll('#patrimonioOutrosWrap .outro-row').forEach(row=>{
+    const nome = row.querySelector('.outro-nome').value.trim();
+    const valor = parseFloat(row.querySelector('.outro-valor').value)||0;
+    if(nome) outros.push({id:uid(), nome, valor});
+  });
+
+  DB.patrimonioInicial = { dataInicio, saldoConta, reservaInicial, faturasIniciais, outros };
+  saveDB();
+  closeModal();
+  toast('Patrimônio inicial atualizado!');
+  renderDashboard();
+  if(document.getElementById('page-reserva').classList.contains('active')) renderReservaPage();
+  if(document.getElementById('page-cartoes').classList.contains('active')) renderCartoesPage();
+}
+document.getElementById('editPatrimonioBtn').addEventListener('click', openPatrimonioModal);
 
 document.getElementById('cfgResetAll').addEventListener('click', ()=>{
   if(!confirm('Tem certeza? Isso apagará TODOS os dados salvos neste navegador.')) return;
