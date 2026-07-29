@@ -242,8 +242,13 @@
         <div class="panel">
           <h3><i class="fa-solid fa-coins"></i> Movimentações da reserva</h3>
           <div class="reserva-form">
+            <select id="reservaTipoInput">
+              <option value="aporte">Aporte / retirada</option>
+              <option value="rendimento">Rendimento do investimento</option>
+            </select>
             <input type="number" step="0.01" id="reservaValorInput" placeholder="Valor (use negativo p/ retirar)">
             <input type="text" id="reservaDescInput" placeholder="Descrição (ex: aporte de julho)">
+            <input type="date" id="reservaDataInput">
             <button class="btn btn-primary" id="addReservaBtn"><i class="fa-solid fa-plus"></i> Lançar</button>
           </div>
           <div id="reservaHistorico" class="recent-list"></div>
@@ -254,16 +259,7 @@
           <canvas id="chartReserva" height="220"></canvas>
         </div>
 
-        <div class="cards-grid mini">
-          <div class="stat-card">
-            <span class="stat-label">Guardado este mês</span>
-            <strong id="statGuardadoMes">R$ 0,00</strong>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">Média mensal guardada</span>
-            <strong id="statMediaGuardada">R$ 0,00</strong>
-          </div>
-        </div>
+        <div class="cards-grid mini" id="reservaMiniStats"></div>
       </div>
     </section>
 
@@ -325,6 +321,7 @@
           <p class="eyebrow">Personalização</p>
           <h2>Configurações</h2>
         </div>
+        <button class="btn btn-primary" id="cfgSaveBtn"><i class="fa-solid fa-check"></i> Salvar configurações</button>
       </div>
 
       <div class="settings-grid">
@@ -352,6 +349,12 @@
         </div>
 
         <div class="panel">
+          <h3><i class="fa-solid fa-seedling"></i> Patrimônio inicial</h3>
+          <p class="muted">Cadastre o que você já tinha antes de começar a usar o sistema (saldo em conta, reserva/investimentos, faturas de cartão em aberto, outros bens). Esses valores viram o ponto de partida dos seus indicadores — sem contar como movimentação do dia a dia.</p>
+          <button class="btn btn-secondary btn-block" id="editPatrimonioBtn"><i class="fa-solid fa-pen"></i> Editar patrimônio inicial</button>
+        </div>
+
+        <div class="panel">
           <h3><i class="fa-solid fa-database"></i> Dados</h3>
           <p class="muted">Seus dados ficam salvos apenas neste navegador.</p>
           <button class="btn btn-secondary btn-block" id="cfgExportBackup"><i class="fa-solid fa-file-export"></i> Exportar backup (JSON)</button>
@@ -364,11 +367,6 @@
           <button class="btn btn-danger btn-block" id="cfgResetAll"><i class="fa-solid fa-trash"></i> Apagar todos os dados</button>
         </div>
 
-        <div class="panel">
-          <h3><i class="fa-solid fa-save"></i> Salvar</h3>
-          <p class="muted">Clique para aplicar as alterações do perfil e aparência.</p>
-          <button class="btn btn-primary btn-block" id="cfgSaveBtn"><i class="fa-solid fa-check"></i> Salvar configurações</button>
-        </div>
       </div>
     </section>
 
