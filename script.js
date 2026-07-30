@@ -411,6 +411,11 @@ function renderDashPie(key){
   const labels = Object.keys(dados);
   const values = Object.values(dados);
   const ctx = document.getElementById('chartDashPie');
+  if(!chartsReady()){
+    ctx.parentElement.querySelector('.chart-fallback')?.remove();
+    ctx.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
+    return;
+  }
   if(chartDashPie) chartDashPie.destroy();
   if(labels.length===0){ ctx.getContext('2d').clearRect(0,0,ctx.width,ctx.height); return; }
   chartDashPie = new Chart(ctx, {
@@ -926,6 +931,11 @@ function renderReservaChart(){
   const labels = [], values = [];
   hist.forEach(h=>{ acumulado += Number(h.valor); labels.push(formatDataBr(h.data)); values.push(acumulado); });
   const ctx = document.getElementById('chartReserva');
+  if(!chartsReady()){
+    ctx.parentElement.querySelector('.chart-fallback')?.remove();
+    ctx.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
+    return;
+  }
   if(chartReserva) chartReserva.destroy();
   const accentRgb = hexToRgb(DB.config.cor);
   chartReserva = new Chart(ctx, {
@@ -942,6 +952,14 @@ let chartsRefs = {};
 function destroyChart(name){ if(chartsRefs[name]){ chartsRefs[name].destroy(); delete chartsRefs[name]; } }
 
 function renderGraficosPage(){
+  if(!chartsReady()){
+    document.querySelectorAll('#page-graficos canvas').forEach(c=>{
+      if(!c.parentElement.querySelector('.chart-fallback')){
+        c.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
+      }
+    });
+    return;
+  }
   // categoria (todos os tempos)
   const catData = {};
   DB.gastos.forEach(g=> catData[g.categoria] = (catData[g.categoria]||0)+Number(g.valor));
@@ -1290,11 +1308,15 @@ function applyConfigVisuals(){
   document.getElementById('themeToggleBtn').innerHTML = DB.config.tema==='escuro'
     ? '<i class="fa-solid fa-sun"></i> Modo claro' : '<i class="fa-solid fa-moon"></i> Modo escuro';
 }
+function chartsReady(){ return typeof Chart !== 'undefined'; }
 function applyChartTheme(){
-  const style = getComputedStyle(document.documentElement);
-  Chart.defaults.color = style.getPropertyValue('--texto-suave').trim() || '#9C7C8C';
-  Chart.defaults.borderColor = style.getPropertyValue('--linha').trim() || '#F3DCE6';
-  Chart.defaults.font.family = 'Quicksand';
+  if(!chartsReady()) return;
+  try{
+    const style = getComputedStyle(document.documentElement);
+    Chart.defaults.color = style.getPropertyValue('--texto-suave').trim() || '#9C7C8C';
+    Chart.defaults.borderColor = style.getPropertyValue('--linha').trim() || '#F3DCE6';
+    Chart.defaults.font.family = 'Quicksand';
+  }catch(e){ console.warn('Não foi possível aplicar tema aos gráficos', e); }
 }
 function activePageId(){
   const active = document.querySelector('.nav-tab.active');
@@ -1672,9 +1694,9 @@ function renderAll(){
 
 function init(){
   initNav();
-  applyConfigVisuals();
+  try{ applyConfigVisuals(); }catch(e){ console.error('Erro ao aplicar aparência (não impede o resto do app):', e); }
   initWelcome();
   initMoneyInputs(document);
-  renderAll();
+  try{ renderAll(); }catch(e){ console.error('Erro ao renderizar (verifique conexão com CDNs externos):', e); }
 }
 init();
