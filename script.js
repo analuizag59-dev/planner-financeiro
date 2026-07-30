@@ -284,7 +284,7 @@ function totalRecebimentosAno(key){
   return total;
 }
 function mediaEconomiaMensal(){
-  const meses = new Set([...DB.gastos.map(g=>monthKey(g.data)), ...DB.recebimentos.map(r=>monthKey(r.data))]);
+  const meses = new Set([...DB.gastos.map(g=>monthKey(g.vencimento||g.data)), ...DB.recebimentos.map(r=>monthKey(r.data))]);
   if(meses.size===0) return 0;
   let total = 0;
   meses.forEach(m=> total += economiaMes(m));
@@ -500,9 +500,11 @@ function escapeHtml(str){
    GASTOS
 ===================================================== */
 function populateGastoFilters(){
-  const meses = [...new Set(DB.gastos.map(g=>monthKey(g.data)))].sort().reverse();
+  const meses = [...new Set(DB.gastos.map(g=>monthKey(g.vencimento||g.data)))].sort().reverse();
   const selMes = document.getElementById('filterGastoMes');
+  const valorAtual = selMes.value;
   selMes.innerHTML = '<option value="">Todos os meses</option>' + meses.map(m=>`<option value="${m}">${monthLabel(m)}</option>`).join('');
+  if(meses.includes(valorAtual)) selMes.value = valorAtual;
   const selCat = document.getElementById('filterGastoCategoria');
   selCat.innerHTML = '<option value="">Todas categorias</option>' + DB.categoriasGasto.map(c=>`<option value="${c.nome}">${c.emoji} ${c.nome}</option>`).join('');
   const selCartao = document.getElementById('filterGastoCartao');
@@ -522,13 +524,13 @@ function applyGastoFilters(){
   const busca = document.getElementById('filterGastoBusca').value.toLowerCase();
 
   let list = [...DB.gastos];
-  if(mes) list = list.filter(g=>monthKey(g.data)===mes);
+  if(mes) list = list.filter(g=>monthKey(g.vencimento||g.data)===mes);
   if(cat) list = list.filter(g=>g.categoria===cat);
   if(cartao) list = list.filter(g=>g.cartaoId===cartao);
   if(forma) list = list.filter(g=>g.forma===forma);
   if(status) list = list.filter(g=> status==='pago' ? g.pago : !g.pago);
   if(busca) list = list.filter(g=> (g.nome+g.categoria+(g.obs||'')).toLowerCase().includes(busca));
-  list.sort((a,b)=>b.data.localeCompare(a.data));
+  list.sort((a,b)=>(b.vencimento||b.data).localeCompare(a.vencimento||a.data));
 
   const tbody = document.getElementById('gastosTableBody');
   document.getElementById('gastosEmpty').style.display = list.length? 'none':'block';
@@ -1275,7 +1277,7 @@ searchInput.addEventListener('input', ()=>{
   const box = document.getElementById('searchResults');
   if(!q){ box.classList.remove('show'); return; }
   const results = [];
-  DB.gastos.forEach(g=>{ if((g.nome+g.categoria).toLowerCase().includes(q)) results.push({tipo:'Gasto', titulo:g.nome, sub:`${g.categoria} · ${formatDataBr(g.data)}`, page:'gastos'}); });
+  DB.gastos.forEach(g=>{ if((g.nome+g.categoria).toLowerCase().includes(q)) results.push({tipo:'Gasto', titulo:g.nome, sub:`${g.categoria} · vence ${formatDataBr(g.vencimento||g.data)}`, page:'gastos'}); });
   DB.recebimentos.forEach(r=>{ if((r.descricao+r.categoria).toLowerCase().includes(q)) results.push({tipo:'Recebimento', titulo:r.descricao, sub:`${r.categoria} · ${formatDataBr(r.data)}`, page:'recebimentos'}); });
   DB.cartoes.forEach(c=>{ if((c.nome+c.banco).toLowerCase().includes(q)) results.push({tipo:'Cartão', titulo:c.nome, sub:c.banco, page:'cartoes'}); });
   [...DB.categoriasGasto, ...DB.categoriasReceita].forEach(c=>{ if(c.nome.toLowerCase().includes(q)) results.push({tipo:'Categoria', titulo:c.nome, sub:c.emoji, page:'categorias'}); });
