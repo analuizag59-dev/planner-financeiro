@@ -364,6 +364,17 @@
         </div>
 
         <div class="panel">
+          <h3><i class="fa-solid fa-arrows-rotate"></i> Lançamentos recorrentes</h3>
+          <p class="muted">Cadastre aqui o que se repete todo mês com o mesmo valor — salário, INSS, plano de saúde, vale-refeição, assinaturas fixas. Depois é só clicar em "Gerar lançamentos do mês" e o app cria tudo de uma vez, sem precisar digitar de novo.</p>
+          <div id="recorrentesList" class="recent-list" style="margin-bottom:14px"></div>
+          <button class="btn btn-secondary btn-block" id="addRecorrenteBtn"><i class="fa-solid fa-plus"></i> Adicionar recorrente</button>
+          <div class="form-row" style="margin-top:6px">
+            <input type="month" id="gerarRecorrentesMes">
+            <button class="btn btn-primary" id="gerarRecorrentesBtn" style="width:auto"><i class="fa-solid fa-bolt"></i> Gerar lançamentos do mês</button>
+          </div>
+        </div>
+
+        <div class="panel">
           <h3><i class="fa-solid fa-seedling"></i> Patrimônio inicial</h3>
           <p class="muted">Cadastre o que você já tinha antes de começar a usar o sistema (saldo em conta, reserva/investimentos, faturas de cartão em aberto, outros bens). Esses valores viram o ponto de partida dos seus indicadores — sem contar como movimentação do dia a dia.</p>
           <button class="btn btn-secondary btn-block" id="editPatrimonioBtn"><i class="fa-solid fa-pen"></i> Editar patrimônio inicial</button>

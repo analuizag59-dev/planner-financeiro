@@ -40,12 +40,21 @@ function defaultData(){
     reserva:{ meta:20000, historico:[] },
     patrimonioInicial:{ dataInicio: todayISO(), saldoConta:0, reservaInicial:0, outros:[], faturasIniciais:{} },
     alertasLidos: [],
+    recorrentes: [],
   };
 }
 
 let DB = loadDB();
 migrateLegacyFaturas();
+ensureCategoriaDescontos();
+if(!DB.recorrentes) DB.recorrentes = [];
 
+function ensureCategoriaDescontos(){
+  if(!DB.categoriasGasto.find(c=>c.nome==='Descontos da Folha')){
+    DB.categoriasGasto.push({id:uid(), nome:'Descontos da Folha', emoji:'🧾'});
+    saveDB();
+  }
+}
 /* Backups antigos guardavam a fatura inicial como um número solto (sem data de
    vencimento). A versão atual trata isso como um lançamento de verdade, com
    vencimento — então migramos automaticamente pra não perder o valor. */
@@ -1249,6 +1258,10 @@ function renderConfigPage(){
       sw.classList.add('active');
     });
   });
+  renderRecorrentesList();
+  if(!document.getElementById('gerarRecorrentesMes').value){
+    document.getElementById('gerarRecorrentesMes').value = todayISO().slice(0,7);
+  }
 }
 document.getElementById('cfgSaveBtn').addEventListener('click', ()=>{
   DB.config.nome = document.getElementById('cfgNome').value.trim() || 'Usuária';
@@ -1390,6 +1403,100 @@ document.getElementById('cfgExportPdf').addEventListener('click', ()=>{
     </body></html>`);
   win.document.close();
   setTimeout(()=>win.print(), 400);
+});
+
+/* --- lançamentos recorrentes --- */
+function renderRecorrentesList(){
+  const wrap = document.getElementById('recorrentesList');
+  if(!wrap) return;
+  if(!DB.recorrentes.length){
+    wrap.innerHTML = `<p class="empty-state">Nenhum recorrente cadastrado ainda.</p>`;
+    return;
+  }
+  wrap.innerHTML = DB.recorrentes.map(r=>`
+    <div class="recent-item">
+      <div class="ri-left">
+        <div class="ri-icon"><i class="fa-solid ${r.tipo==='recebimento'?'fa-sack-dollar':'fa-bag-shopping'}"></i></div>
+        <div><p class="ri-title">${escapeHtml(r.nome)}</p>
+        <p class="ri-sub">${r.categoria} · todo dia ${r.dia} · ${r.tipo==='recebimento'?'entrada':'saída'}</p></div>
+      </div>
+      <div class="ri-value ${r.tipo==='recebimento'?'pos':'neg'}">${r.tipo==='recebimento'?'+':'-'} ${fmtMoney(r.valor)}</div>
+      <button class="icon-btn-sm" onclick="openRecorrenteModal('${r.id}')"><i class="fa-solid fa-pen"></i></button>
+      <button class="icon-btn-sm" onclick="deleteRecorrente('${r.id}')"><i class="fa-solid fa-trash"></i></button>
+    </div>`).join('');
+}
+function deleteRecorrente(id){
+  if(!confirm('Remover este lançamento recorrente? Isso não apaga os lançamentos já gerados, só o modelo.')) return;
+  DB.recorrentes = DB.recorrentes.filter(r=>r.id!==id);
+  saveDB(); toast('Recorrente removido','fa-solid fa-trash'); renderRecorrentesList();
+}
+function openRecorrenteModal(id){
+  const r = id ? DB.recorrentes.find(x=>x.id===id) : null;
+  openModal(r?'Editar recorrente':'Novo lançamento recorrente', `
+    <div class="form-group"><label>Tipo</label>
+      <select id="fRecorTipo">
+        <option value="recebimento" ${r?.tipo==='recebimento'?'selected':''}>Recebimento (entra)</option>
+        <option value="gasto" ${r?.tipo==='gasto'?'selected':''}>Gasto (sai)</option>
+      </select>
+    </div>
+    <div class="form-group"><label>Nome</label><input type="text" id="fRecorNome" value="${r?escapeHtml(r.nome):''}" placeholder="Ex: Salário, INSS, Plano de saúde..."></div>
+    <div class="form-row">
+      <div class="form-group"><label>Categoria</label><input type="text" id="fRecorCategoria" value="${r?escapeHtml(r.categoria):''}" placeholder="Ex: Salário, Descontos da Folha..."></div>
+      <div class="form-group"><label>Valor</label><input type="text" class="money-input" id="fRecorValor" value="${r?moneyMaskInitialValue(r.valor):''}" placeholder="0,00"></div>
+    </div>
+    <div class="form-group"><label>Todo dia (do mês)</label><input type="number" min="1" max="31" id="fRecorDia" value="${r?r.dia:5}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" style="width:auto" id="cancelRecor">Cancelar</button>
+      <button class="btn btn-primary" id="saveRecor"><i class="fa-solid fa-check"></i> Salvar</button>
+    </div>
+  `);
+  document.getElementById('cancelRecor').addEventListener('click', closeModal);
+  document.getElementById('saveRecor').addEventListener('click', ()=>{
+    const tipo = document.getElementById('fRecorTipo').value;
+    const nome = document.getElementById('fRecorNome').value.trim();
+    const categoria = document.getElementById('fRecorCategoria').value.trim() || (tipo==='gasto'?'Descontos da Folha':'Salário');
+    const valor = moneyInputValue(document.getElementById('fRecorValor'));
+    const dia = Math.min(31, Math.max(1, parseInt(document.getElementById('fRecorDia').value)||1));
+    if(!nome || !valor){ toast('Preencha nome e valor 🌷','fa-solid fa-triangle-exclamation'); return; }
+    if(id){
+      Object.assign(DB.recorrentes.find(x=>x.id===id), {tipo,nome,categoria,valor,dia});
+    } else {
+      DB.recorrentes.push({id:uid(), tipo, nome, categoria, valor, dia, ativo:true});
+    }
+    saveDB(); closeModal(); toast('Recorrente salvo!'); renderRecorrentesList();
+  });
+}
+document.getElementById('addRecorrenteBtn').addEventListener('click', ()=>openRecorrenteModal(null));
+
+function diaValidoNoMes(ano, mes, dia){
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  return Math.min(dia, ultimoDia);
+}
+function gerarLancamentosRecorrentes(mesStr){
+  if(!DB.recorrentes.length){ toast('Cadastre pelo menos um recorrente primeiro 🌷','fa-solid fa-triangle-exclamation'); return; }
+  const [ano, mes] = mesStr.split('-').map(Number);
+  let criados = 0, existentes = 0;
+  DB.recorrentes.forEach(r=>{
+    const jaExiste = (r.tipo==='recebimento' ? DB.recebimentos : DB.gastos)
+      .some(x=>x.recorrenteId===r.id && monthKey(x.data)===mesStr);
+    if(jaExiste){ existentes++; return; }
+    const dia = diaValidoNoMes(ano, mes, r.dia);
+    const data = `${mesStr}-${String(dia).padStart(2,'0')}`;
+    if(r.tipo==='recebimento'){
+      DB.recebimentos.push({id:uid(), descricao:r.nome, categoria:r.categoria, valor:r.valor, data, obs:'Gerado automaticamente (recorrente).', recorrenteId:r.id});
+    } else {
+      DB.gastos.push({id:uid(), nome:r.nome, categoria:r.categoria, valor:r.valor, data, forma:'Dinheiro', cartaoId:'', parcelas:1, parcelaAtual:1, vencimento:data, pago:false, obs:'Gerado automaticamente (recorrente).', recorrenteId:r.id});
+    }
+    criados++;
+  });
+  saveDB();
+  toast(criados ? `${criados} lançamento(s) gerado(s) para ${monthLabel(mesStr)}!` : `Já estava tudo gerado para ${monthLabel(mesStr)} (${existentes} recorrente(s)).`);
+  renderPage(activePageId());
+}
+document.getElementById('gerarRecorrentesBtn').addEventListener('click', ()=>{
+  const mes = document.getElementById('gerarRecorrentesMes').value;
+  if(!mes){ toast('Escolha o mês 🌷','fa-solid fa-triangle-exclamation'); return; }
+  gerarLancamentosRecorrentes(mes);
 });
 
 /* --- patrimônio inicial --- */
