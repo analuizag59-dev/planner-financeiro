@@ -220,7 +220,7 @@ function renderPage(page){
 /* =====================================================
    CÁLCULOS FINANCEIROS
 ===================================================== */
-function gastosDoMes(key){ return DB.gastos.filter(g=>monthKey(g.vencimento||g.data)===key && !g.origemInicial); }
+function gastosDoMes(key){ return DB.gastos.filter(g=>monthKey(g.vencimento||g.data)===key); }
 function recebimentosDoMes(key){ return DB.recebimentos.filter(r=>monthKey(r.data)===key); }
 
 function totalGastosMes(key){ return gastosDoMes(key).reduce((s,g)=>s+Number(g.valor),0); }
@@ -372,9 +372,9 @@ function renderDashboard(){
       <strong>${c.value}</strong>
     </div>`).join('');
 
-  // últimos lançamentos (globais, não só do mês; exclui lançamentos automáticos do patrimônio inicial)
+  // últimos lançamentos (globais, não só do mês)
   const lancamentos = [
-    ...DB.gastos.filter(g=>!g.origemInicial).map(g=>({...g, tipo:'gasto'})),
+    ...DB.gastos.map(g=>({...g, tipo:'gasto'})),
     ...DB.recebimentos.map(r=>({...r, tipo:'receb', nome:r.descricao})),
   ].sort((a,b)=> b.data.localeCompare(a.data)).slice(0,8);
 
@@ -695,13 +695,20 @@ function saveRec(id){
 /* =====================================================
    CARTÕES
 ===================================================== */
+function faturaGastos(cartaoId, key){
+  return DB.gastos.filter(g=>g.cartaoId===cartaoId && g.forma==='Crédito' && monthKey(g.vencimento||g.data)===key);
+}
 function renderCartoesPage(){
   const key = currentDashMonth;
+  document.getElementById('cartaoCurrentMonth').textContent = monthLabel(key);
   document.getElementById('cartoesEmpty').style.display = DB.cartoes.length? 'none':'block';
   document.getElementById('cartoesGrid').innerHTML = DB.cartoes.map(c=>{
     const usado = totalUsadoCartao(c.id);
     const pct = c.limite>0 ? Math.min(100, (usado/c.limite)*100) : 0;
-    const fatura = totalFaturaCartaoMes(c.id, key);
+    const gastosFatura = faturaGastos(c.id, key);
+    const fatura = gastosFatura.reduce((s,g)=>s+Number(g.valor),0);
+    const pendente = gastosFatura.filter(g=>!g.pago).reduce((s,g)=>s+Number(g.valor),0);
+    const todosPagos = gastosFatura.length>0 && pendente===0;
     return `<div class="cartao-card">
       <div class="cartao-actions">
         <button onclick="openCartaoModal('${c.id}')"><i class="fa-solid fa-pen"></i></button>
@@ -719,11 +726,66 @@ function renderCartoesPage(){
         <div class="cartao-info"><span>Usado: ${fmtMoney(usado)}</span><span>Limite: ${fmtMoney(c.limite)}</span></div>
       </div>
       <div>
-        <p class="cartao-fatura">${fmtMoney(fatura)} <small style="font-size:.65rem;opacity:.85">fatura do mês</small></p>
+        <p class="cartao-fatura">${fmtMoney(fatura)} <small style="font-size:.65rem;opacity:.85">fatura de ${monthShort(key)}${gastosFatura.length?` · ${gastosFatura.length} lançamento(s)`:''}</small></p>
         <div class="cartao-info"><span>Melhor dia p/ compra: ${c.melhorDiaCompra}</span><span>Vence dia ${c.vencimento}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;position:relative;z-index:1">
+        <button class="btn btn-secondary" style="width:auto;margin:0;background:rgba(255,255,255,.25);color:#fff" onclick="openFaturaModal('${c.id}')"><i class="fa-solid fa-list"></i> Ver fatura</button>
+        ${gastosFatura.length ? `<button class="btn btn-secondary" style="width:auto;margin:0;background:${todosPagos?'rgba(255,255,255,.15)':'#fff'};color:${todosPagos?'rgba(255,255,255,.7)':'var(--accent-dark)'}" ${todosPagos?'disabled':''} onclick="pagarFaturaCartao('${c.id}')"><i class="fa-solid fa-check-double"></i> ${todosPagos?'Fatura paga':'Pagar fatura toda'}</button>` : ''}
       </div>
     </div>`;
   }).join('');
+}
+document.getElementById('cartaoPrevMonth').addEventListener('click', ()=>{ currentDashMonth = addMonths(currentDashMonth,-1); renderCartoesPage(); });
+document.getElementById('cartaoNextMonth').addEventListener('click', ()=>{ currentDashMonth = addMonths(currentDashMonth,1); renderCartoesPage(); });
+
+function pagarFaturaCartao(cartaoId){
+  const key = currentDashMonth;
+  const gastos = faturaGastos(cartaoId, key).filter(g=>!g.pago);
+  if(!gastos.length) return;
+  const total = gastos.reduce((s,g)=>s+Number(g.valor),0);
+  const cartao = DB.cartoes.find(c=>c.id===cartaoId);
+  if(!confirm(`Marcar toda a fatura de ${monthLabel(key)} do cartão ${cartao?cartao.nome:''} (${fmtMoney(total)}, ${gastos.length} lançamento(s)) como paga?`)) return;
+  gastos.forEach(g=>{ g.pago = true; });
+  saveDB();
+  toast('Fatura marcada como paga!');
+  renderCartoesPage();
+  renderAlerts();
+  if(document.getElementById('page-dashboard').classList.contains('active')) renderDashboard();
+}
+function openFaturaModal(cartaoId){
+  const key = currentDashMonth;
+  const cartao = DB.cartoes.find(c=>c.id===cartaoId);
+  const gastos = faturaGastos(cartaoId, key).sort((a,b)=>a.data.localeCompare(b.data));
+  const total = gastos.reduce((s,g)=>s+Number(g.valor),0);
+  const pendente = gastos.filter(g=>!g.pago).reduce((s,g)=>s+Number(g.valor),0);
+
+  const linhas = gastos.length ? gastos.map(g=>`
+    <div class="recent-item">
+      <div class="ri-left">
+        <div class="ri-icon">${catInfo(g.categoria,'gasto').emoji}</div>
+        <div><p class="ri-title">${escapeHtml(g.nome)}${g.parcelas>1?` (${g.parcelaAtual}/${g.parcelas})`:''}${g.origemInicial?' <span class="tag-pill" style="background:var(--aviso-bg);color:var(--aviso);font-size:.65rem">Inicial</span>':''}</p>
+        <p class="ri-sub">Compra em ${formatDataBr(g.data)}</p></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="status-pill ${g.pago?'pago':'pendente'}" style="cursor:pointer" onclick="toggleGastoPago('${g.id}');openFaturaModal('${cartaoId}')">${g.pago?'Paga':'Pendente'}</span>
+        <strong>${fmtMoney(g.valor)}</strong>
+      </div>
+    </div>`).join('') : `<p class="empty-state">Nenhum lançamento com vencimento em ${monthLabel(key)} para este cartão.</p>`;
+
+  openModal(`Fatura de ${cartao?cartao.nome:''} — ${monthLabel(key)}`, `
+    <div class="cards-grid mini" style="margin-bottom:16px">
+      <div class="stat-card"><span class="stat-label">Total da fatura</span><strong>${fmtMoney(total)}</strong></div>
+      <div class="stat-card ${pendente>0?'warn':'good'}"><span class="stat-label">Ainda pendente</span><strong>${fmtMoney(pendente)}</strong></div>
+    </div>
+    <p class="muted">Confira aqui se bate com a fatura real do seu cartão. Cada lançamento pode ser marcado como pago individualmente, ou tudo de uma vez pelo botão "Pagar fatura toda".</p>
+    <div style="max-height:320px;overflow-y:auto;margin-bottom:10px">${linhas}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" style="width:auto" id="closeFaturaModal">Fechar</button>
+      ${pendente>0 ? `<button class="btn btn-primary" onclick="pagarFaturaCartao('${cartaoId}');closeModal()"><i class="fa-solid fa-check-double"></i> Pagar fatura toda</button>` : ''}
+    </div>
+  `);
+  document.getElementById('closeFaturaModal').addEventListener('click', closeModal);
 }
 document.getElementById('addCartaoBtn').addEventListener('click', ()=>openCartaoModal(null));
 function openCartaoModal(id){

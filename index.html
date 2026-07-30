@@ -211,7 +211,14 @@
           <p class="eyebrow">Controle</p>
           <h2>Cartões de crédito</h2>
         </div>
-        <button class="btn btn-primary" id="addCartaoBtn"><i class="fa-solid fa-plus"></i> Novo cartão</button>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <div class="month-switcher">
+            <button class="icon-btn-sm" id="cartaoPrevMonth"><i class="fa-solid fa-chevron-left"></i></button>
+            <span id="cartaoCurrentMonth">—</span>
+            <button class="icon-btn-sm" id="cartaoNextMonth"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+          <button class="btn btn-primary" id="addCartaoBtn"><i class="fa-solid fa-plus"></i> Novo cartão</button>
+        </div>
       </div>
       <div class="cards-grid" id="cartoesGrid"></div>
       <p class="empty-state" id="cartoesEmpty" style="display:none">Nenhum cartão cadastrado. Adicione o primeiro! 💳</p>
