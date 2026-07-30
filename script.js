@@ -402,6 +402,9 @@ function renderDashboard(){
   }).join('') : `<p class="empty-state">Nenhum lançamento ainda. Comece adicionando um gasto ou recebimento! 🌷</p>`;
 
   renderDashPie(key);
+  renderDashReceitaDespesa(key);
+  renderDashSemanal(key);
+  renderDashMensal();
 }
 
 let chartDashPie;
@@ -411,23 +414,75 @@ function renderDashPie(key){
   const labels = Object.keys(dados);
   const values = Object.values(dados);
   const ctx = document.getElementById('chartDashPie');
-  if(!chartsReady()){
-    ctx.parentElement.querySelector('.chart-fallback')?.remove();
-    ctx.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
-    return;
-  }
+  if(!chartsReady()){ chartFallback(ctx); return; }
+  clearChartFallback(ctx);
   if(chartDashPie) chartDashPie.destroy();
   if(labels.length===0){ ctx.getContext('2d').clearRect(0,0,ctx.width,ctx.height); return; }
   chartDashPie = new Chart(ctx, {
     type:'doughnut',
     data:{ labels, datasets:[{ data:values, backgroundColor: paletteFor(labels.length), borderWidth:2, borderColor:'#fff' }] },
-    options:{ plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{family:'Quicksand'} } } }, cutout:'62%' }
+    options:{ plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{family:'Quicksand'} } }, tooltip: moneyTooltipPlugin() }, cutout:'62%' }
   });
 }
 function paletteFor(n){
   const base = [DB.config.cor, '#C9A15A','#B29DD9','#8FBFD9','#7FB08F','#E4729E','#EFC77A','#D9A7B2','#A98DC4','#F2C6D6']
     .filter((c,i,arr)=>arr.indexOf(c)===i);
   const out=[]; for(let i=0;i<n;i++) out.push(base[i%base.length]); return out;
+}
+
+let chartDashReceitaDespesa, chartDashSemanal, chartDashMensal;
+
+function gastosPorSemana(key){
+  const [ano,mes] = key.split('-').map(Number);
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  const numSemanas = Math.ceil(diasNoMes/7);
+  const totais = new Array(numSemanas).fill(0);
+  gastosDoMes(key).forEach(g=>{
+    const dia = Number((g.vencimento||g.data).slice(8,10));
+    const idx = Math.min(numSemanas-1, Math.floor((dia-1)/7));
+    totais[idx] += Number(g.valor);
+  });
+  return { labels: totais.map((_,i)=> i===numSemanas-1 ? `Semana ${i+1}` : `Semana ${i+1} (${i*7+1}–${(i+1)*7})`), values: totais };
+}
+
+function renderDashReceitaDespesa(key){
+  const ctx = document.getElementById('chartDashReceitaDespesa');
+  if(!chartsReady()){ chartFallback(ctx); return; }
+  clearChartFallback(ctx);
+  if(chartDashReceitaDespesa) chartDashReceitaDespesa.destroy();
+  const receita = totalRecebimentosMes(key);
+  const despesa = totalGastosMes(key);
+  chartDashReceitaDespesa = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:['Receita','Despesa'], datasets:[{ data:[receita,despesa], backgroundColor:['#7FB08F','#E08A8A'], borderRadius:8, maxBarThickness:70 }] },
+    options:{ plugins:{ legend:{display:false}, tooltip:moneyTooltipPlugin() }, scales:{ y: moneyYScale({ beginAtZero:true }) } }
+  });
+}
+
+function renderDashSemanal(key){
+  const ctx = document.getElementById('chartDashSemanal');
+  if(!chartsReady()){ chartFallback(ctx); return; }
+  clearChartFallback(ctx);
+  if(chartDashSemanal) chartDashSemanal.destroy();
+  const { labels, values } = gastosPorSemana(key);
+  chartDashSemanal = new Chart(ctx, {
+    type:'bar',
+    data:{ labels, datasets:[{ label:'Gasto', data:values, backgroundColor:DB.config.cor, borderRadius:8 }] },
+    options:{ plugins:{ legend:{display:false}, tooltip:moneyTooltipPlugin() }, scales:{ y: moneyYScale({ beginAtZero:true }) } }
+  });
+}
+
+function renderDashMensal(){
+  const ctx = document.getElementById('chartDashMensal');
+  if(!chartsReady()){ chartFallback(ctx); return; }
+  clearChartFallback(ctx);
+  if(chartDashMensal) chartDashMensal.destroy();
+  const meses = lastNMonths(6);
+  chartDashMensal = new Chart(ctx, {
+    type:'bar',
+    data:{ labels: meses.map(monthShort), datasets:[{ label:'Gasto', data: meses.map(m=>totalGastosMes(m)), backgroundColor:'#E4729E', borderRadius:8 }] },
+    options:{ plugins:{ legend:{display:false}, tooltip:moneyTooltipPlugin() }, scales:{ y: moneyYScale({ beginAtZero:true }) } }
+  });
 }
 document.getElementById('dashPrevMonth')?.addEventListener('click', ()=>{ currentDashMonth = addMonths(currentDashMonth,-1); renderDashboard(); });
 document.getElementById('dashNextMonth')?.addEventListener('click', ()=>{ currentDashMonth = addMonths(currentDashMonth,1); renderDashboard(); });
@@ -483,7 +538,7 @@ function applyGastoFilters(){
     return `<tr>
       <td><strong>${escapeHtml(g.nome)}</strong>${g.origemInicial?' <span class="tag-pill" style="background:var(--aviso-bg);color:var(--aviso)">Inicial</span>':''}${g.obs?`<br><small class="muted">${escapeHtml(g.obs)}</small>`:''}</td>
       <td><span class="tag-pill">${info.emoji} ${g.categoria}</span></td>
-      <td>${formatDataBr(g.data)}</td>
+      <td>${formatDataBr(g.vencimento||g.data)}</td>
       <td>${g.forma}${cartaoNome? ' · '+cartaoNome:''}</td>
       <td>${g.parcelas>1 ? `${g.parcelaAtual}/${g.parcelas}` : '—'}</td>
       <td><strong>${fmtMoney(g.valor)}</strong></td>
@@ -931,17 +986,14 @@ function renderReservaChart(){
   const labels = [], values = [];
   hist.forEach(h=>{ acumulado += Number(h.valor); labels.push(formatDataBr(h.data)); values.push(acumulado); });
   const ctx = document.getElementById('chartReserva');
-  if(!chartsReady()){
-    ctx.parentElement.querySelector('.chart-fallback')?.remove();
-    ctx.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
-    return;
-  }
+  if(!chartsReady()){ chartFallback(ctx); return; }
+  clearChartFallback(ctx);
   if(chartReserva) chartReserva.destroy();
   const accentRgb = hexToRgb(DB.config.cor);
   chartReserva = new Chart(ctx, {
     type:'line',
     data:{ labels, datasets:[{ label:'Reserva acumulada', data:values, borderColor:DB.config.cor, backgroundColor:`rgba(${accentRgb.r},${accentRgb.g},${accentRgb.b},.15)`, fill:true, tension:.35 }] },
-    options:{ plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true } } }
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale({ beginAtZero:true }) } }
   });
 }
 
@@ -953,13 +1005,20 @@ function destroyChart(name){ if(chartsRefs[name]){ chartsRefs[name].destroy(); d
 
 function renderGraficosPage(){
   if(!chartsReady()){
-    document.querySelectorAll('#page-graficos canvas').forEach(c=>{
-      if(!c.parentElement.querySelector('.chart-fallback')){
-        c.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
-      }
-    });
+    document.querySelectorAll('#page-graficos canvas').forEach(chartFallback);
     return;
   }
+  document.querySelectorAll('#page-graficos canvas').forEach(clearChartFallback);
+
+  // receita x despesa do mês atualmente selecionado no dashboard
+  const mesAtual = currentDashMonth;
+  destroyChart('rdMes');
+  chartsRefs.rdMes = new Chart(document.getElementById('chartReceitaDespesaMes'), {
+    type:'bar',
+    data:{ labels:['Receita','Despesa'], datasets:[{ data:[totalRecebimentosMes(mesAtual), totalGastosMes(mesAtual)], backgroundColor:['#7FB08F','#E08A8A'], borderRadius:8, maxBarThickness:70 }] },
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale({ beginAtZero:true }) } }
+  });
+
   // categoria (todos os tempos)
   const catData = {};
   DB.gastos.forEach(g=> catData[g.categoria] = (catData[g.categoria]||0)+Number(g.valor));
@@ -967,7 +1026,7 @@ function renderGraficosPage(){
   chartsRefs.cat = new Chart(document.getElementById('chartCategoria'), {
     type:'pie',
     data:{ labels:Object.keys(catData), datasets:[{data:Object.values(catData), backgroundColor:paletteFor(Object.keys(catData).length)}] },
-    options:{ plugins:{legend:{position:'bottom'}} }
+    options:{ plugins:{legend:{position:'bottom'}, tooltip:moneyTooltipPlugin()} }
   });
 
   // últimos 6 meses
@@ -977,7 +1036,7 @@ function renderGraficosPage(){
   chartsRefs.saldo = new Chart(document.getElementById('chartSaldo'), {
     type:'line',
     data:{ labels:meses.map(monthShort), datasets:[{label:'Saldo', data:saldoVals, borderColor:'#C9A15A', backgroundColor:'rgba(201,161,90,.15)', fill:true, tension:.35}] },
-    options:{ plugins:{legend:{display:false}} }
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale() } }
   });
 
   destroyChart('rd');
@@ -987,14 +1046,14 @@ function renderGraficosPage(){
       {label:'Receitas', data:meses.map(m=>totalRecebimentosMes(m)), backgroundColor:'#7FB08F'},
       {label:'Despesas', data:meses.map(m=>totalGastosMes(m)), backgroundColor:'#E08A8A'},
     ]},
-    options:{ plugins:{legend:{position:'bottom'}} }
+    options:{ plugins:{legend:{position:'bottom'}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale({ beginAtZero:true }) } }
   });
 
   destroyChart('econ');
   chartsRefs.econ = new Chart(document.getElementById('chartEconomia'), {
     type:'line',
     data:{ labels:meses.map(monthShort), datasets:[{label:'Economia', data:meses.map(m=>economiaMes(m)), borderColor:'#F49AC1', backgroundColor:'rgba(244,154,193,.2)', fill:true, tension:.35}] },
-    options:{ plugins:{legend:{display:false}} }
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale() } }
   });
 
   destroyChart('cartaoChart');
@@ -1003,7 +1062,7 @@ function renderGraficosPage(){
   chartsRefs.cartaoChart = new Chart(document.getElementById('chartCartao'), {
     type:'bar',
     data:{ labels:cartaoLabels, datasets:[{label:'Em aberto', data:cartaoValues, backgroundColor:'#B29DD9'}] },
-    options:{ plugins:{legend:{display:false}} }
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale({ beginAtZero:true }) } }
   });
 
   destroyChart('patr');
@@ -1011,7 +1070,7 @@ function renderGraficosPage(){
   chartsRefs.patr = new Chart(document.getElementById('chartPatrimonio'), {
     type:'line',
     data:{ labels:meses.map(monthShort), datasets:[{label:'Patrimônio', data:patrVals, borderColor:'#8FBFD9', backgroundColor:'rgba(143,191,217,.25)', fill:true, tension:.35}] },
-    options:{ plugins:{legend:{display:false}} }
+    options:{ plugins:{legend:{display:false}, tooltip:moneyTooltipPlugin()}, scales:{ y: moneyYScale() } }
   });
 }
 function lastNMonths(n){
@@ -1309,6 +1368,21 @@ function applyConfigVisuals(){
     ? '<i class="fa-solid fa-sun"></i> Modo claro' : '<i class="fa-solid fa-moon"></i> Modo escuro';
 }
 function chartsReady(){ return typeof Chart !== 'undefined'; }
+function chartFallback(ctx){
+  if(!ctx.parentElement.querySelector('.chart-fallback')){
+    ctx.insertAdjacentHTML('afterend', `<p class="empty-state chart-fallback">Gráfico indisponível no momento (verifique sua conexão).</p>`);
+  }
+}
+function clearChartFallback(ctx){
+  ctx.parentElement.querySelector('.chart-fallback')?.remove();
+}
+function moneyTooltipLabel(ctx){
+  const raw = (ctx.parsed && typeof ctx.parsed === 'object') ? ctx.parsed.y : ctx.parsed;
+  const prefixo = ctx.dataset && ctx.dataset.label ? ctx.dataset.label + ': ' : (ctx.label ? ctx.label + ': ' : '');
+  return prefixo + fmtMoney(raw);
+}
+function moneyTooltipPlugin(){ return { callbacks: { label: moneyTooltipLabel } }; }
+function moneyYScale(extra={}){ return Object.assign({ ticks:{ callback:v=>fmtMoney(v) } }, extra); }
 function applyChartTheme(){
   if(!chartsReady()) return;
   try{
@@ -1403,7 +1477,7 @@ document.getElementById('cfgExportExcel').addEventListener('click', ()=>{
 document.getElementById('cfgExportPdf').addEventListener('click', ()=>{
   const key = currentDashMonth;
   const win = window.open('', '_blank');
-  const linhas = DB.gastos.filter(g=>monthKey(g.data)===key).map(g=>`<tr><td>${g.nome}</td><td>${g.categoria}</td><td>${formatDataBr(g.data)}</td><td>${fmtMoney(g.valor)}</td><td>${g.pago?'Pago':'Pendente'}</td></tr>`).join('');
+  const linhas = gastosDoMes(key).map(g=>`<tr><td>${g.nome}</td><td>${g.categoria}</td><td>${formatDataBr(g.vencimento||g.data)}</td><td>${fmtMoney(g.valor)}</td><td>${g.pago?'Pago':'Pendente'}</td></tr>`).join('');
   win.document.write(`
     <html><head><title>Relatório financeiro — ${monthLabel(key)}</title>
     <style>
