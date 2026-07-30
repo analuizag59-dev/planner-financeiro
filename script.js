@@ -39,10 +39,44 @@ function defaultData(){
     categoriasReceita: CATEGORIA_RECEITA_DEFAULT.map(c=>({id:uid(), ...c})),
     reserva:{ meta:20000, historico:[] },
     patrimonioInicial:{ dataInicio: todayISO(), saldoConta:0, reservaInicial:0, outros:[], faturasIniciais:{} },
+    alertasLidos: [],
   };
 }
 
 let DB = loadDB();
+migrateLegacyFaturas();
+
+/* Backups antigos guardavam a fatura inicial como um número solto (sem data de
+   vencimento). A versão atual trata isso como um lançamento de verdade, com
+   vencimento — então migramos automaticamente pra não perder o valor. */
+function migrateLegacyFaturas(){
+  const p = DB.patrimonioInicial;
+  if(!p || !p.faturasIniciais || !Object.keys(p.faturasIniciais).length) return;
+  let mudou = false;
+  Object.entries(p.faturasIniciais).forEach(([cartaoId, valor])=>{
+    if(!valor) return;
+    const jaExiste = DB.gastos.find(g=>g.origemInicial && g.cartaoId===cartaoId);
+    if(jaExiste) return;
+    const cartao = DB.cartoes.find(c=>c.id===cartaoId);
+    const dataInicio = p.dataInicio || todayISO();
+    let vencimento = dataInicio;
+    if(cartao && cartao.vencimento){
+      const d = parseISO(dataInicio);
+      let venc = new Date(d.getFullYear(), d.getMonth(), Number(cartao.vencimento));
+      if(venc < d) venc.setMonth(venc.getMonth()+1);
+      vencimento = venc.toISOString().slice(0,10);
+    }
+    DB.gastos.push({
+      id:uid(), nome:`Fatura inicial em aberto${cartao?(' — '+cartao.nome):''}`,
+      categoria:'Fatura inicial', valor, data:dataInicio, forma:'Crédito',
+      cartaoId, parcelas:1, parcelaAtual:1, vencimento, pago:false,
+      obs:'Migrado automaticamente de um backup anterior — confira a data de vencimento.', origemInicial:true
+    });
+    mudou = true;
+  });
+  p.faturasIniciais = {};
+  if(mudou) saveDB();
+}
 
 function loadDB(){
   try{
@@ -72,6 +106,49 @@ function fmtMoney(v){
   const n = Number(v)||0;
   const abs = Math.abs(n).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
   return (n<0? '-':'') + symbol + ' ' + abs;
+}
+
+/* ---------- máscara de moeda para inputs ---------- */
+function digitsToMoneyString(digits){
+  digits = String(digits).replace(/\D/g,'');
+  digits = digits.replace(/^0+(?=\d)/,'');
+  if(!digits) return '';
+  while(digits.length<3) digits = '0'+digits;
+  const intPart = digits.slice(0,-2).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  const decPart = digits.slice(-2);
+  return intPart+','+decPart;
+}
+function moneyInputValue(input){
+  if(!input) return 0;
+  const digits = (input.value||'').replace(/\D/g,'');
+  if(!digits) return 0;
+  return parseInt(digits,10)/100;
+}
+function setMoneyInputValue(input, num){
+  if(!input) return;
+  const cents = Math.round((Number(num)||0)*100);
+  input.value = cents ? digitsToMoneyString(String(cents)) : '';
+}
+function moneyMaskInitialValue(num){
+  const cents = Math.round((Number(num)||0)*100);
+  return cents ? digitsToMoneyString(String(cents)) : '';
+}
+function attachMoneyMask(input){
+  if(!input || input.dataset.moneyMaskAttached) return;
+  input.dataset.moneyMaskAttached = '1';
+  input.setAttribute('inputmode','decimal');
+  input.setAttribute('autocomplete','off');
+  input.addEventListener('input', ()=>{
+    const digits = input.value.replace(/\D/g,'');
+    input.value = digits ? digitsToMoneyString(digits) : '';
+  });
+  input.addEventListener('focus', ()=>{
+    // deixa o cursor sempre no final, mais natural pra digitar centavos
+    const v = input.value; input.value=''; input.value=v;
+  });
+}
+function initMoneyInputs(root){
+  (root||document).querySelectorAll('.money-input').forEach(attachMoneyMask);
 }
 function parseISO(d){ return new Date(d+'T00:00:00'); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
@@ -143,19 +220,18 @@ function renderPage(page){
 /* =====================================================
    CÁLCULOS FINANCEIROS
 ===================================================== */
-function gastosDoMes(key){ return DB.gastos.filter(g=>monthKey(g.data)===key); }
+function gastosDoMes(key){ return DB.gastos.filter(g=>monthKey(g.vencimento||g.data)===key && !g.origemInicial); }
 function recebimentosDoMes(key){ return DB.recebimentos.filter(r=>monthKey(r.data)===key); }
 
 function totalGastosMes(key){ return gastosDoMes(key).reduce((s,g)=>s+Number(g.valor),0); }
 function totalRecebimentosMes(key){ return recebimentosDoMes(key).reduce((s,r)=>s+Number(r.valor),0); }
 
 function saldoAteMes(key){
-  // soma tudo até (e incluindo) o mês key, partindo do saldo inicial em conta cadastrado
+  // soma tudo até (e incluindo) o mês key, partindo do saldo inicial em conta cadastrado.
+  // gastos entram pelo mês de VENCIMENTO (quando realmente saem da conta/fatura), não da compra.
   let saldo = (DB.patrimonioInicial && DB.patrimonioInicial.saldoConta) || 0;
   DB.recebimentos.forEach(r=>{ if(monthKey(r.data) <= key) saldo += Number(r.valor); });
-  DB.gastos.forEach(g=>{ if(monthKey(g.data) <= key && g.forma!=='Crédito') saldo -= Number(g.valor); });
-  // faturas de crédito entram no vencimento
-  DB.gastos.forEach(g=>{ if(g.forma==='Crédito' && monthKey(g.vencimento||g.data) <= key) saldo -= Number(g.valor); });
+  DB.gastos.forEach(g=>{ if(monthKey(g.vencimento||g.data) <= key) saldo -= Number(g.valor); });
   return saldo;
 }
 
@@ -165,10 +241,8 @@ function totalFaturaCartaoMes(cartaoId, key){
 }
 function totalUsadoCartao(cartaoId){
   // soma de parcelas futuras/pendentes em aberto (aproximação: todas as parcelas não pagas)
-  const dosGastos = DB.gastos.filter(g=>g.cartaoId===cartaoId && g.forma==='Crédito' && !g.pago)
+  return DB.gastos.filter(g=>g.cartaoId===cartaoId && g.forma==='Crédito' && !g.pago)
     .reduce((s,g)=>s+Number(g.valor),0);
-  const inicial = (DB.patrimonioInicial && DB.patrimonioInicial.faturasIniciais && DB.patrimonioInicial.faturasIniciais[cartaoId]) || 0;
-  return dosGastos + inicial;
 }
 function outrosPatrimoniosTotal(){
   return ((DB.patrimonioInicial && DB.patrimonioInicial.outros) || []).reduce((s,o)=>s+Number(o.valor),0);
@@ -181,6 +255,24 @@ function contasPendentes(key){
 }
 function economiaMes(key){
   return totalRecebimentosMes(key) - totalGastosMes(key);
+}
+function totalGastosAno(key){
+  const ano = key.slice(0,4);
+  const mesFinal = parseInt(key.slice(5,7),10);
+  let total = 0;
+  for(let m=1;m<=mesFinal;m++){
+    total += totalGastosMes(`${ano}-${String(m).padStart(2,'0')}`);
+  }
+  return total;
+}
+function totalRecebimentosAno(key){
+  const ano = key.slice(0,4);
+  const mesFinal = parseInt(key.slice(5,7),10);
+  let total = 0;
+  for(let m=1;m<=mesFinal;m++){
+    total += totalRecebimentosMes(`${ano}-${String(m).padStart(2,'0')}`);
+  }
+  return total;
 }
 function mediaEconomiaMensal(){
   const meses = new Set([...DB.gastos.map(g=>monthKey(g.data)), ...DB.recebimentos.map(r=>monthKey(r.data))]);
@@ -251,6 +343,9 @@ function renderDashboard(){
   const pctRenda = percentualRendaComprometida(key);
   const prontoVenc = proximoVencimentoCartao();
   const pendentes = contasPendentes(key);
+  const gastoAno = totalGastosAno(key);
+  const recebAno = totalRecebimentosAno(key);
+  const anoLabel = key.slice(0,4);
 
   const cards = [
     {label: key===todayISO().slice(0,7) ? 'Saldo atual' : `Saldo até ${monthShort(key)}`, value:fmtMoney(saldo), icon:'fa-wallet', cls: saldo<0?'danger':'good'},
@@ -263,6 +358,8 @@ function renderDashboard(){
     {label:'% da renda comprometida', value:pctRenda.toFixed(0)+'%', icon:'fa-gauge', cls: pctRenda>80?'danger':(pctRenda>50?'warn':'good')},
     {label:'Próx. vencimento cartão', value: prontoVenc? `${prontoVenc.nome} · ${prontoVenc.data.getDate()}/${prontoVenc.data.getMonth()+1}` : '—', icon:'fa-calendar-day', cls:''},
     {label:'Contas pendentes', value:pendentes, icon:'fa-list-check', cls: pendentes>0?'warn':'good'},
+    {label:`Gasto acumulado em ${anoLabel}`, value:fmtMoney(gastoAno), icon:'fa-calendar-check', cls:'danger'},
+    {label:`Recebido acumulado em ${anoLabel}`, value:fmtMoney(recebAno), icon:'fa-calendar-check', cls:'good'},
   ];
   if(outrosPatrimoniosTotal()>0){
     cards.push({label:'Outros patrimônios', value:fmtMoney(outrosPatrimoniosTotal()), icon:'fa-gem', cls:'good'});
@@ -275,9 +372,9 @@ function renderDashboard(){
       <strong>${c.value}</strong>
     </div>`).join('');
 
-  // últimos lançamentos (globais, não só do mês)
+  // últimos lançamentos (globais, não só do mês; exclui lançamentos automáticos do patrimônio inicial)
   const lancamentos = [
-    ...DB.gastos.map(g=>({...g, tipo:'gasto'})),
+    ...DB.gastos.filter(g=>!g.origemInicial).map(g=>({...g, tipo:'gasto'})),
     ...DB.recebimentos.map(r=>({...r, tipo:'receb', nome:r.descricao})),
   ].sort((a,b)=> b.data.localeCompare(a.data)).slice(0,8);
 
@@ -370,7 +467,7 @@ function applyGastoFilters(){
     const info = catInfo(g.categoria,'gasto');
     const cartaoNome = g.cartaoId ? (DB.cartoes.find(c=>c.id===g.cartaoId)?.nome || '') : '';
     return `<tr>
-      <td><strong>${escapeHtml(g.nome)}</strong>${g.obs?`<br><small class="muted">${escapeHtml(g.obs)}</small>`:''}</td>
+      <td><strong>${escapeHtml(g.nome)}</strong>${g.origemInicial?' <span class="tag-pill" style="background:var(--aviso-bg);color:var(--aviso)">Inicial</span>':''}${g.obs?`<br><small class="muted">${escapeHtml(g.obs)}</small>`:''}</td>
       <td><span class="tag-pill">${info.emoji} ${g.categoria}</span></td>
       <td>${formatDataBr(g.data)}</td>
       <td>${g.forma}${cartaoNome? ' · '+cartaoNome:''}</td>
@@ -415,7 +512,7 @@ function openGastoModal(id){
     <div class="form-group"><label>Nome da despesa</label><input type="text" id="fGastoNome" value="${g?escapeHtml(g.nome):''}" placeholder="Ex: Supermercado"></div>
     <div class="form-row">
       <div class="form-group"><label>Categoria</label><select id="fGastoCategoria">${catOptions}</select></div>
-      <div class="form-group"><label>Valor</label><input type="number" step="0.01" id="fGastoValor" value="${g?g.valor:''}" placeholder="0,00"></div>
+      <div class="form-group"><label>Valor</label><input type="text" class="money-input" id="fGastoValor" value="${g?moneyMaskInitialValue(g.valor):''}" placeholder="0,00"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Data da compra</label><input type="date" id="fGastoData" value="${g?g.data:todayISO()}"></div>
@@ -446,6 +543,7 @@ function openGastoModal(id){
         <div class="checkbox-row" style="margin-bottom:12px;"><input type="checkbox" id="fGastoPago" ${g?.pago?'checked':''}><label style="margin:0">Já foi pago</label></div>
       </div>
     </div>
+    <p class="muted" style="margin-top:-8px">É esta data que define em qual mês o gasto entra no dashboard, no saldo e nos gráficos — não a data da compra. Para Pix/débito/dinheiro ela é preenchida automaticamente igual à data da compra.</p>
     <div class="form-group"><label>Observações</label><textarea id="fGastoObs">${g?escapeHtml(g.obs||''):''}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" style="width:auto" id="cancelGasto">Cancelar</button>
@@ -454,7 +552,16 @@ function openGastoModal(id){
   `);
   document.getElementById('fGastoForma').addEventListener('change', e=>{
     document.getElementById('fGastoCreditoWrap').style.display = e.target.value==='Crédito' ? 'block':'none';
+    if(e.target.value!=='Crédito' && !document.getElementById('fGastoVencimento').dataset.tocado){
+      document.getElementById('fGastoVencimento').value = document.getElementById('fGastoData').value;
+    }
   });
+  document.getElementById('fGastoData').addEventListener('change', e=>{
+    const forma = document.getElementById('fGastoForma').value;
+    const vencEl = document.getElementById('fGastoVencimento');
+    if(forma!=='Crédito' && !vencEl.dataset.tocado) vencEl.value = e.target.value;
+  });
+  document.getElementById('fGastoVencimento').addEventListener('change', e=>{ e.target.dataset.tocado='1'; });
   document.getElementById('cancelGasto').addEventListener('click', closeModal);
   document.getElementById('saveGasto').addEventListener('click', ()=> saveGasto(id));
 }
@@ -463,7 +570,7 @@ document.getElementById('addGastoBtn').addEventListener('click', ()=>openGastoMo
 function saveGasto(id){
   const nome = document.getElementById('fGastoNome').value.trim();
   const categoria = document.getElementById('fGastoCategoria').value;
-  const valor = parseFloat(document.getElementById('fGastoValor').value);
+  const valor = moneyInputValue(document.getElementById('fGastoValor'));
   const data = document.getElementById('fGastoData').value;
   const forma = document.getElementById('fGastoForma').value;
   const cartaoId = document.getElementById('fGastoCartao') ? document.getElementById('fGastoCartao').value : '';
@@ -472,7 +579,7 @@ function saveGasto(id){
   const pago = document.getElementById('fGastoPago').checked;
   const obs = document.getElementById('fGastoObs').value.trim();
 
-  if(!nome || !categoria || isNaN(valor) || !data){
+  if(!nome || !categoria || !valor || !data){
     toast('Preencha os campos obrigatórios 🌷', 'fa-solid fa-triangle-exclamation'); return;
   }
 
@@ -556,7 +663,7 @@ function openRecModal(id){
     <div class="form-group"><label>Descrição</label><input type="text" id="fRecDesc" value="${r?escapeHtml(r.descricao):''}" placeholder="Ex: Salário de julho"></div>
     <div class="form-row">
       <div class="form-group"><label>Categoria</label><select id="fRecCategoria">${catOptions}</select></div>
-      <div class="form-group"><label>Valor</label><input type="number" step="0.01" id="fRecValor" value="${r?r.valor:''}"></div>
+      <div class="form-group"><label>Valor</label><input type="text" class="money-input" id="fRecValor" value="${r?moneyMaskInitialValue(r.valor):''}" placeholder="0,00"></div>
     </div>
     <div class="form-group"><label>Data</label><input type="date" id="fRecData" value="${r?r.data:todayISO()}"></div>
     <div class="form-group"><label>Observações</label><textarea id="fRecObs">${r?escapeHtml(r.obs||''):''}</textarea></div>
@@ -572,10 +679,10 @@ document.getElementById('addRecebimentoBtn').addEventListener('click', ()=>openR
 function saveRec(id){
   const descricao = document.getElementById('fRecDesc').value.trim();
   const categoria = document.getElementById('fRecCategoria').value;
-  const valor = parseFloat(document.getElementById('fRecValor').value);
+  const valor = moneyInputValue(document.getElementById('fRecValor'));
   const data = document.getElementById('fRecData').value;
   const obs = document.getElementById('fRecObs').value.trim();
-  if(!descricao || isNaN(valor) || !data){ toast('Preencha os campos obrigatórios 🌷','fa-solid fa-triangle-exclamation'); return; }
+  if(!descricao || !valor || !data){ toast('Preencha os campos obrigatórios 🌷','fa-solid fa-triangle-exclamation'); return; }
   if(id){
     Object.assign(DB.recebimentos.find(x=>x.id===id), {descricao,categoria,valor,data,obs});
   } else {
@@ -624,7 +731,7 @@ function openCartaoModal(id){
   openModal(c?'Editar cartão':'Novo cartão', `
     <div class="form-group"><label>Nome do cartão</label><input type="text" id="fCartaoNome" value="${c?escapeHtml(c.nome):''}" placeholder="Ex: Nubank Roxinho"></div>
     <div class="form-group"><label>Banco</label><input type="text" id="fCartaoBanco" value="${c?escapeHtml(c.banco||''):''}" placeholder="Ex: Nubank"></div>
-    <div class="form-group"><label>Limite</label><input type="number" step="0.01" id="fCartaoLimite" value="${c?c.limite:''}"></div>
+    <div class="form-group"><label>Limite</label><input type="text" class="money-input" id="fCartaoLimite" value="${c?moneyMaskInitialValue(c.limite):''}" placeholder="0,00"></div>
     <div class="form-row">
       <div class="form-group"><label>Melhor dia para compra</label><input type="number" min="1" max="31" id="fCartaoMelhorDia" value="${c?c.melhorDiaCompra:1}"></div>
       <div class="form-group"><label>Dia de vencimento</label><input type="number" min="1" max="31" id="fCartaoVencimento" value="${c?c.vencimento:10}"></div>
@@ -640,7 +747,7 @@ function openCartaoModal(id){
 function saveCartao(id){
   const nome = document.getElementById('fCartaoNome').value.trim();
   const banco = document.getElementById('fCartaoBanco').value.trim();
-  const limite = parseFloat(document.getElementById('fCartaoLimite').value)||0;
+  const limite = moneyInputValue(document.getElementById('fCartaoLimite'));
   const melhorDiaCompra = parseInt(document.getElementById('fCartaoMelhorDia').value)||1;
   const vencimento = parseInt(document.getElementById('fCartaoVencimento').value)||10;
   if(!nome){ toast('Informe o nome do cartão 🌷','fa-solid fa-triangle-exclamation'); return; }
@@ -713,11 +820,13 @@ function deleteReservaMov(id){
   saveDB(); toast('Movimentação removida','fa-solid fa-trash'); renderReservaPage();
 }
 document.getElementById('addReservaBtn').addEventListener('click', ()=>{
-  const valor = parseFloat(document.getElementById('reservaValorInput').value);
+  let valor = moneyInputValue(document.getElementById('reservaValorInput'));
+  const direcao = document.getElementById('reservaDirecaoInput').value;
   const desc = document.getElementById('reservaDescInput').value.trim();
   const tipo = document.getElementById('reservaTipoInput').value;
   const data = document.getElementById('reservaDataInput').value || todayISO();
-  if(isNaN(valor)){ toast('Informe um valor válido 🌷','fa-solid fa-triangle-exclamation'); return; }
+  if(!valor){ toast('Informe um valor válido 🌷','fa-solid fa-triangle-exclamation'); return; }
+  if(direcao==='saida') valor = -valor;
   DB.reserva.historico.push({id:uid(), valor, desc, data, tipo});
   saveDB();
   document.getElementById('reservaValorInput').value='';
@@ -727,7 +836,7 @@ document.getElementById('addReservaBtn').addEventListener('click', ()=>{
 });
 document.getElementById('editMetaBtn').addEventListener('click', ()=>{
   openModal('Definir meta financeira', `
-    <div class="form-group"><label>Valor da meta</label><input type="number" step="0.01" id="fMetaValor" value="${DB.reserva.meta||0}"></div>
+    <div class="form-group"><label>Valor da meta</label><input type="text" class="money-input" id="fMetaValor" value="${moneyMaskInitialValue(DB.reserva.meta||0)}"></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" style="width:auto" id="cancelMeta">Cancelar</button>
       <button class="btn btn-primary" id="saveMeta"><i class="fa-solid fa-check"></i> Salvar</button>
@@ -735,7 +844,7 @@ document.getElementById('editMetaBtn').addEventListener('click', ()=>{
   `);
   document.getElementById('cancelMeta').addEventListener('click', closeModal);
   document.getElementById('saveMeta').addEventListener('click', ()=>{
-    DB.reserva.meta = parseFloat(document.getElementById('fMetaValor').value)||0;
+    DB.reserva.meta = moneyInputValue(document.getElementById('fMetaValor'));
     saveDB(); closeModal(); toast('Meta atualizada!'); renderReservaPage();
   });
 });
@@ -944,46 +1053,70 @@ document.getElementById('addCategoriaBtn').addEventListener('click', ()=>{
 /* =====================================================
    ALERTAS
 ===================================================== */
+let ultimosAlertas = [];
 function renderAlerts(){
-  const alerts = [];
+  const alerts = []; // cada item: {id, tipo, msg}
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const amanha = new Date(hoje); amanha.setDate(amanha.getDate()+1);
   const em3dias = new Date(hoje); em3dias.setDate(em3dias.getDate()+3);
+  const mesAtual = todayISO().slice(0,7);
 
   DB.gastos.filter(g=>!g.pago).forEach(g=>{
     const venc = parseISO(g.vencimento||g.data);
-    if(venc.getTime()===amanha.getTime()) alerts.push({tipo:'aviso', msg:`"${g.nome}" vence amanhã (${fmtMoney(g.valor)})`});
-    else if(venc>=hoje && venc<=em3dias) alerts.push({tipo:'info', msg:`"${g.nome}" vence em breve, dia ${formatDataBr(g.vencimento||g.data)}`});
-    else if(venc<hoje) alerts.push({tipo:'perigo', msg:`"${g.nome}" está atrasado desde ${formatDataBr(g.vencimento||g.data)}`});
+    if(venc.getTime()===amanha.getTime()) alerts.push({id:`venc-amanha-${g.id}`, tipo:'aviso', msg:`"${g.nome}" vence amanhã (${fmtMoney(g.valor)})`});
+    else if(venc>=hoje && venc<=em3dias) alerts.push({id:`venc-breve-${g.id}`, tipo:'info', msg:`"${g.nome}" vence em breve, dia ${formatDataBr(g.vencimento||g.data)}`});
+    else if(venc<hoje) alerts.push({id:`venc-atrasado-${g.id}-${monthKey(g.vencimento||g.data)}`, tipo:'perigo', msg:`"${g.nome}" está atrasado desde ${formatDataBr(g.vencimento||g.data)}`});
   });
 
   DB.cartoes.forEach(c=>{
     const usado = totalUsadoCartao(c.id);
-    if(c.limite>0 && usado/c.limite>=0.8) alerts.push({tipo:'aviso', msg:`Cartão ${c.nome} está com mais de 80% do limite usado`});
+    if(c.limite>0 && usado/c.limite>=0.8) alerts.push({id:`limite-${c.id}`, tipo:'aviso', msg:`Cartão ${c.nome} está com mais de 80% do limite usado`});
     const hojeDia = hoje.getDate();
     const diff = (c.vencimento - hojeDia + 31) % 31;
-    if(diff<=3) alerts.push({tipo:'info', msg:`Fatura do cartão ${c.nome} vence em ${diff===0?'hoje':diff+' dia(s)'}`});
+    if(diff<=3) alerts.push({id:`fatura-${c.id}-${mesAtual}`, tipo:'info', msg:`Fatura do cartão ${c.nome} vence em ${diff===0?'hoje':diff+' dia(s)'}`});
   });
 
-  const key = todayISO().slice(0,7);
-  if(totalGastosMes(key) > mediaEconomiaMensal() + totalRecebimentosMes(key) && totalRecebimentosMes(key)>0 && totalGastosMes(key) > totalRecebimentosMes(key)){
-    alerts.push({tipo:'perigo', msg:'Os gastos deste mês ultrapassaram os recebimentos.'});
+  if(totalGastosMes(mesAtual) > mediaEconomiaMensal() + totalRecebimentosMes(mesAtual) && totalRecebimentosMes(mesAtual)>0 && totalGastosMes(mesAtual) > totalRecebimentosMes(mesAtual)){
+    alerts.push({id:`gastos-acima-${mesAtual}`, tipo:'perigo', msg:'Os gastos deste mês ultrapassaram os recebimentos.'});
   }
   const meta = DB.reserva.meta||0;
-  if(meta>0 && reservaTotal()>=meta) alerts.push({tipo:'sucesso', msg:'🎉 Meta financeira atingida! Parabéns!'});
+  if(meta>0 && reservaTotal()>=meta) alerts.push({id:'meta-atingida', tipo:'sucesso', msg:'🎉 Meta financeira atingida! Parabéns!'});
+
+  if(!DB.alertasLidos) DB.alertasLidos = [];
+  const lidos = new Set(DB.alertasLidos);
+  const naoLidos = alerts.filter(a=>!lidos.has(a.id));
+  ultimosAlertas = alerts;
 
   const badge = document.getElementById('alertsBadge');
-  badge.textContent = alerts.length;
-  badge.setAttribute('data-zero', alerts.length===0);
+  badge.textContent = naoLidos.length;
+  badge.setAttribute('data-zero', naoLidos.length===0);
 
-  document.getElementById('alertsList').innerHTML = alerts.length ? alerts.map(a=>`
-    <div class="alert-item ${a.tipo}"><i class="fa-solid ${a.tipo==='sucesso'?'fa-circle-check':a.tipo==='perigo'?'fa-circle-exclamation':a.tipo==='aviso'?'fa-triangle-exclamation':'fa-circle-info'}"></i> <span>${a.msg}</span></div>
-  `).join('') : `<p class="empty-state">Tudo tranquilo por aqui! 🌸</p>`;
+  document.getElementById('alertsList').innerHTML = alerts.length ? alerts.map(a=>{
+    const lido = lidos.has(a.id);
+    const icon = a.tipo==='sucesso'?'fa-circle-check':a.tipo==='perigo'?'fa-circle-exclamation':a.tipo==='aviso'?'fa-triangle-exclamation':'fa-circle-info';
+    return `<div class="alert-item ${a.tipo}" style="${lido?'opacity:.55':''}">
+      <i class="fa-solid ${icon}"></i> <span style="flex:1">${a.msg}</span>
+      ${lido ? '' : `<button class="icon-btn-sm" onclick="marcarAlertaLido('${a.id}')" title="Marcar como lido"><i class="fa-solid fa-check"></i></button>`}
+    </div>`;
+  }).join('') : `<p class="empty-state">Tudo tranquilo por aqui! 🌸</p>`;
+}
+function marcarAlertaLido(id){
+  if(!DB.alertasLidos) DB.alertasLidos = [];
+  if(!DB.alertasLidos.includes(id)) DB.alertasLidos.push(id);
+  saveDB();
+  renderAlerts();
+}
+function marcarTodosAlertasLidos(){
+  if(!DB.alertasLidos) DB.alertasLidos = [];
+  ultimosAlertas.forEach(a=>{ if(!DB.alertasLidos.includes(a.id)) DB.alertasLidos.push(a.id); });
+  saveDB();
+  renderAlerts();
 }
 document.getElementById('alertsBtn').addEventListener('click', ()=>{
   document.getElementById('alertsPanel').classList.toggle('show');
 });
 document.getElementById('closeAlertsBtn').addEventListener('click', ()=>document.getElementById('alertsPanel').classList.remove('show'));
+document.getElementById('markAllAlertsBtn').addEventListener('click', marcarTodosAlertasLidos);
 
 /* =====================================================
    PESQUISA GLOBAL
@@ -1022,6 +1155,7 @@ function openModal(title, bodyHtml){
   document.getElementById('modalTitle').textContent = title;
   document.getElementById('modalBody').innerHTML = bodyHtml;
   document.getElementById('modalOverlay').classList.add('show');
+  initMoneyInputs(document.getElementById('modalBody'));
 }
 function closeModal(){ document.getElementById('modalOverlay').classList.remove('show'); }
 document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
@@ -1142,6 +1276,8 @@ document.getElementById('cfgImportBackup').addEventListener('change', e=>{
     try{
       const data = JSON.parse(ev.target.result);
       DB = Object.assign(defaultData(), data);
+      if(!DB.alertasLidos) DB.alertasLidos = [];
+      migrateLegacyFaturas();
       saveDB();
       toast('Backup importado com sucesso!');
       applyConfigVisuals();
@@ -1199,29 +1335,66 @@ function outroRowHtml(nome='', valor=''){
   return `<div class="form-row outro-row" style="margin-bottom:10px">
     <input type="text" class="outro-nome" placeholder="Ex: Carro, poupança em outro banco..." value="${escapeHtml(nome)}">
     <div style="display:flex;gap:8px">
-      <input type="number" step="0.01" class="outro-valor" placeholder="Valor" value="${valor}">
+      <input type="text" class="outro-valor money-input" placeholder="0,00" value="${moneyMaskInitialValue(valor)}">
       <button class="icon-btn-sm" onclick="this.closest('.outro-row').remove()"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>`;
 }
+function faturasIniciaisLista(){
+  return DB.gastos.filter(g=>g.origemInicial);
+}
+function renderFaturasIniciaisList(){
+  const wrap = document.getElementById('faturasIniciaisList');
+  if(!wrap) return;
+  const lista = faturasIniciaisLista().sort((a,b)=>a.vencimento.localeCompare(b.vencimento));
+  wrap.innerHTML = lista.length ? lista.map(g=>{
+    const cartao = DB.cartoes.find(c=>c.id===g.cartaoId);
+    return `<div class="recent-item">
+      <div class="ri-left">
+        <div class="ri-icon"><i class="fa-solid fa-credit-card"></i></div>
+        <div><p class="ri-title">${escapeHtml(cartao?cartao.nome:'Cartão')} — vence ${formatDataBr(g.vencimento)}</p>
+        <p class="ri-sub">${g.pago?'Já paga':'Em aberto'}</p></div>
+      </div>
+      <div class="ri-value neg">${fmtMoney(g.valor)}</div>
+      <button class="icon-btn-sm" onclick="toggleGastoPago('${g.id}');renderFaturasIniciaisList()" title="Marcar como paga/pendente"><i class="fa-solid fa-rotate"></i></button>
+      <button class="icon-btn-sm" onclick="excluirFaturaInicial('${g.id}')"><i class="fa-solid fa-trash"></i></button>
+    </div>`;
+  }).join('') : `<p class="empty-state">Nenhuma fatura inicial cadastrada ainda.</p>`;
+}
+function excluirFaturaInicial(id){
+  if(!confirm('Remover esta fatura inicial?')) return;
+  DB.gastos = DB.gastos.filter(g=>g.id!==id);
+  saveDB();
+  renderFaturasIniciaisList();
+  renderAlerts();
+}
 function openPatrimonioModal(){
   const p = DB.patrimonioInicial;
-  const cartoesHtml = DB.cartoes.length ? DB.cartoes.map(c=>`
-    <div class="form-group">
-      <label>Fatura em aberto hoje — ${escapeHtml(c.nome)}</label>
-      <input type="number" step="0.01" class="fatura-inicial-input" data-cartao-id="${c.id}" value="${(p.faturasIniciais&&p.faturasIniciais[c.id])||0}">
-    </div>`).join('') : `<p class="muted">Você ainda não cadastrou nenhum cartão.</p>`;
+  const cartaoOptions = DB.cartoes.map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
 
   openModal('Patrimônio inicial', `
-    <p class="muted" style="margin-top:-6px">Estes valores representam o que você já tinha <strong>antes</strong> de começar a usar o app — eles não entram como gastos ou recebimentos do dia a dia, apenas como ponto de partida dos indicadores.</p>
+    <p class="muted" style="margin-top:-6px">Estes valores representam o que você já tinha <strong>antes</strong> de começar a usar o app. Saldo em conta, reserva e outros bens entram só como ponto de partida dos indicadores. Já as faturas de cartão viram lançamentos de verdade (com data de vencimento), pra aparecerem certinho no calendário, nos alertas e no "previsto do mês" — sem contar como gasto novo feito por você.</p>
     <div class="form-group"><label>Data de início de uso do sistema</label><input type="date" id="fPatrimonioData" value="${p.dataInicio||todayISO()}"></div>
     <div class="form-row">
-      <div class="form-group"><label>Saldo já disponível em conta</label><input type="number" step="0.01" id="fPatrimonioSaldoConta" value="${p.saldoConta||0}"></div>
-      <div class="form-group"><label>Reserva / investimentos já guardados</label><input type="number" step="0.01" id="fPatrimonioReserva" value="${p.reservaInicial||0}"></div>
+      <div class="form-group"><label>Saldo já disponível em conta</label><input type="text" class="money-input" id="fPatrimonioSaldoConta" value="${moneyMaskInitialValue(p.saldoConta||0)}" placeholder="0,00"></div>
+      <div class="form-group"><label>Reserva / investimentos já guardados</label><input type="text" class="money-input" id="fPatrimonioReserva" value="${moneyMaskInitialValue(p.reservaInicial||0)}" placeholder="0,00"></div>
     </div>
 
-    <h4 style="margin:16px 0 8px;font-size:.9rem">Faturas de cartão já em aberto</h4>
-    <div id="patrimonioCartoesWrap">${cartoesHtml}</div>
+    <h4 style="margin:16px 0 8px;font-size:.9rem">Faturas de cartão (pode adicionar quantas precisar — julho, agosto...)</h4>
+    ${DB.cartoes.length ? `
+    <div class="form-row">
+      <div class="form-group"><label>Cartão</label><select id="fFaturaCartao">${cartaoOptions}</select></div>
+      <div class="form-group"><label>Valor da fatura</label><input type="text" class="money-input" id="fFaturaValor" placeholder="0,00"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Vence em</label><input type="date" id="fFaturaVencimento" value="${todayISO()}"></div>
+      <div class="form-group" style="display:flex;align-items:flex-end;">
+        <div class="checkbox-row" style="margin-bottom:12px;"><input type="checkbox" id="fFaturaPago"><label style="margin:0">Já paguei essa fatura</label></div>
+      </div>
+    </div>
+    <button class="btn btn-secondary" style="width:auto;margin-bottom:14px" id="addFaturaInicialBtn"><i class="fa-solid fa-plus"></i> Adicionar fatura</button>
+    <div id="faturasIniciaisList" class="recent-list" style="margin-bottom:14px"></div>
+    ` : `<p class="muted">Você ainda não cadastrou nenhum cartão.</p>`}
 
     <h4 style="margin:16px 0 8px;font-size:.9rem">Outros patrimônios (imóveis, veículos, outras contas...)</h4>
     <div id="patrimonioOutrosWrap">${(p.outros||[]).map(o=>outroRowHtml(o.nome,o.valor)).join('')}</div>
@@ -1232,37 +1405,59 @@ function openPatrimonioModal(){
       <button class="btn btn-primary" id="savePatrimonio"><i class="fa-solid fa-check"></i> Salvar</button>
     </div>
   `);
+  renderFaturasIniciaisList();
+  const addFaturaBtn = document.getElementById('addFaturaInicialBtn');
+  if(addFaturaBtn){
+    addFaturaBtn.addEventListener('click', ()=>{
+      const cartaoId = document.getElementById('fFaturaCartao').value;
+      const valor = moneyInputValue(document.getElementById('fFaturaValor'));
+      const vencimento = document.getElementById('fFaturaVencimento').value || todayISO();
+      const pago = document.getElementById('fFaturaPago').checked;
+      if(!cartaoId || !valor){ toast('Escolha o cartão e informe o valor 🌷','fa-solid fa-triangle-exclamation'); return; }
+      const cartao = DB.cartoes.find(c=>c.id===cartaoId);
+      DB.gastos.push({
+        id:uid(), nome:`Fatura inicial${cartao?(' — '+cartao.nome):''} (${formatDataBr(vencimento)})`,
+        categoria:'Fatura inicial', valor, data: DB.patrimonioInicial.dataInicio || todayISO(),
+        forma:'Crédito', cartaoId, parcelas:1, parcelaAtual:1, vencimento, pago,
+        obs:'Lançamento automático a partir do patrimônio inicial.', origemInicial:true
+      });
+      saveDB();
+      setMoneyInputValue(document.getElementById('fFaturaValor'), 0);
+      document.getElementById('fFaturaValor').value='';
+      document.getElementById('fFaturaPago').checked=false;
+      toast('Fatura inicial adicionada!');
+      renderFaturasIniciaisList();
+      renderAlerts();
+    });
+  }
   document.getElementById('addOutroBtn').addEventListener('click', ()=>{
     document.getElementById('patrimonioOutrosWrap').insertAdjacentHTML('beforeend', outroRowHtml());
+    initMoneyInputs(document.getElementById('patrimonioOutrosWrap'));
   });
   document.getElementById('cancelPatrimonio').addEventListener('click', closeModal);
   document.getElementById('savePatrimonio').addEventListener('click', savePatrimonioInicial);
 }
 function savePatrimonioInicial(){
   const dataInicio = document.getElementById('fPatrimonioData').value || todayISO();
-  const saldoConta = parseFloat(document.getElementById('fPatrimonioSaldoConta').value)||0;
-  const reservaInicial = parseFloat(document.getElementById('fPatrimonioReserva').value)||0;
+  const saldoConta = moneyInputValue(document.getElementById('fPatrimonioSaldoConta'));
+  const reservaInicial = moneyInputValue(document.getElementById('fPatrimonioReserva'));
 
-  const faturasIniciais = {};
-  document.querySelectorAll('.fatura-inicial-input').forEach(inp=>{
-    const v = parseFloat(inp.value)||0;
-    if(v) faturasIniciais[inp.dataset.cartaoId] = v;
-  });
+  DB.patrimonioInicial.dataInicio = dataInicio;
+  DB.patrimonioInicial.saldoConta = saldoConta;
+  DB.patrimonioInicial.reservaInicial = reservaInicial;
 
   const outros = [];
   document.querySelectorAll('#patrimonioOutrosWrap .outro-row').forEach(row=>{
     const nome = row.querySelector('.outro-nome').value.trim();
-    const valor = parseFloat(row.querySelector('.outro-valor').value)||0;
+    const valor = moneyInputValue(row.querySelector('.outro-valor'));
     if(nome) outros.push({id:uid(), nome, valor});
   });
+  DB.patrimonioInicial.outros = outros;
 
-  DB.patrimonioInicial = { dataInicio, saldoConta, reservaInicial, faturasIniciais, outros };
   saveDB();
   closeModal();
   toast('Patrimônio inicial atualizado!');
-  renderDashboard();
-  if(document.getElementById('page-reserva').classList.contains('active')) renderReservaPage();
-  if(document.getElementById('page-cartoes').classList.contains('active')) renderCartoesPage();
+  renderPage(activePageId());
 }
 document.getElementById('editPatrimonioBtn').addEventListener('click', openPatrimonioModal);
 
@@ -1310,6 +1505,7 @@ function init(){
   initNav();
   applyConfigVisuals();
   initWelcome();
+  initMoneyInputs(document);
   renderAll();
 }
 init();

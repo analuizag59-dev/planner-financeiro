@@ -96,7 +96,10 @@
     <div class="alerts-panel" id="alertsPanel">
       <div class="alerts-panel-head">
         <strong><i class="fa-solid fa-bell"></i> Avisos</strong>
-        <button class="icon-btn-sm" id="closeAlertsBtn"><i class="fa-solid fa-xmark"></i></button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="icon-btn-sm" id="markAllAlertsBtn" title="Marcar todos como lidos"><i class="fa-solid fa-check-double"></i></button>
+          <button class="icon-btn-sm" id="closeAlertsBtn"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
       <div id="alertsList" class="alerts-list"></div>
     </div>
@@ -114,6 +117,7 @@
           <button class="icon-btn-sm" id="dashNextMonth"><i class="fa-solid fa-chevron-right"></i></button>
         </div>
       </div>
+      <p class="muted" style="margin-top:-12px;margin-bottom:18px">Os valores deste mês consideram a <strong>data de vencimento</strong> de cada gasto (quando ele realmente sai da conta ou entra na fatura) — não a data em que a compra foi feita. Assim, uma compra parcelada aparece espalhada nos meses das parcelas, não tudo de uma vez no mês da compra.</p>
 
       <div class="cards-grid" id="dashboardCards"></div>
 
@@ -246,7 +250,11 @@
               <option value="aporte">Aporte / retirada</option>
               <option value="rendimento">Rendimento do investimento</option>
             </select>
-            <input type="number" step="0.01" id="reservaValorInput" placeholder="Valor (use negativo p/ retirar)">
+            <select id="reservaDirecaoInput">
+              <option value="entrada">Entrada (+)</option>
+              <option value="saida">Saída (-)</option>
+            </select>
+            <input type="text" class="money-input" id="reservaValorInput" placeholder="0,00">
             <input type="text" id="reservaDescInput" placeholder="Descrição (ex: aporte de julho)">
             <input type="date" id="reservaDataInput">
             <button class="btn btn-primary" id="addReservaBtn"><i class="fa-solid fa-plus"></i> Lançar</button>
